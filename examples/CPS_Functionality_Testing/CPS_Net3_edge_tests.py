@@ -61,7 +61,7 @@ print(wntr.metrics.topographic.algebraic_connectivity(cpsG))
 print(wntr.metrics.topographic.spectral_gap(cpsG))
 print(wntr.metrics.topographic.terminal_nodes(cpsG))
 #plc-to-plc edge added for duplication/connectivity, combined with rtu-to-plc duplication
-wn_controller._cps_edges.add_MODBUS("p1_MOD_p2","SCADA1","PLC1")
+wn_controller._cps_edges.add_MODBUS("p1_MOD_p2","PLC1","PLC2")
 cpsG = wn_controller.cps_to_graph()
 print(wntr.metrics.topographic.algebraic_connectivity(cpsG))
 print(wntr.metrics.topographic.spectral_gap(cpsG))

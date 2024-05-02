@@ -11,11 +11,11 @@ import plotly.express as px
 
 
 # Create a water network model
-inp_file = '../networks/Net6.inp'
+inp_file = '../networks/Net3.inp'
 wn_controller = wntr.network.WaterNetworkModel(inp_file)
 wn_baseline = wntr.network.WaterNetworkModel(inp_file)
 # Generate a CPS layer     
-autogenerate_full_cps_layer(wn_controller, placement_type='complex', timed_control_assignments='local', edge_types='MODBUS', n=2, verbose=1)
+autogenerate_full_cps_layer(wn_controller, placement_type='complex', timed_control_assignments='local', edge_types='MODBUS', n=2, s=1, verbose=1)
 # Test the CPS layer's connectivity
 cpsG = wn_controller.cps_to_graph()
 print(wntr.metrics.topographic.algebraic_connectivity(cpsG))

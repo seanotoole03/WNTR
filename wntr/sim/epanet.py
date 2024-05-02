@@ -1,5 +1,10 @@
+"""The EPANET simulator.
+"""
+
 from wntr.sim.core import WaterNetworkSimulator
+from wntr.network.io import write_inpfile
 import wntr.epanet.io
+import warnings
 import logging
 
 logger = logging.getLogger(__name__)
@@ -59,7 +64,9 @@ class EpanetSimulator(WaterNetworkSimulator):
         if self.reader is None:
             self.reader = wntr.epanet.io.BinFile(result_types=result_types)
 
-    def run_sim(self, file_prefix='temp', save_hyd=False, use_hyd=False, hydfile=None, version=2.2, convergence_error=False):
+    def run_sim(self, file_prefix='temp', save_hyd=False, use_hyd=False, hydfile=None, 
+                version=2.2, convergence_error=False):
+
         """
         Run the EPANET simulator.
 
@@ -96,10 +103,11 @@ class EpanetSimulator(WaterNetworkSimulator):
         if isinstance(version, str):
             version = float(version)
         inpfile = file_prefix + '.inp'
-        self._wn.write_inpfile(inpfile, units=self._wn.options.hydraulic.inpfile_units, version=version)
+        write_inpfile(self._wn, inpfile, units=self._wn.options.hydraulic.inpfile_units, version=version)
         enData = wntr.epanet.toolkit.ENepanet(version=version)
         rptfile = file_prefix + '.rpt'
         outfile = file_prefix + '.bin'
+        
         if hydfile is None:
             hydfile = file_prefix + '.hyd'
         enData.ENopen(inpfile, rptfile, outfile)
@@ -119,5 +127,8 @@ class EpanetSimulator(WaterNetworkSimulator):
         enData.ENclose()
         logger.debug('Completed run')
         #os.sys.stderr.write('Finished Closing\n')
-        return self.reader.read(outfile, convergence_error)
+        
+        results = self.reader.read(outfile, convergence_error, self._wn.options.hydraulic.headloss=='D-W')
+
+        return results
 

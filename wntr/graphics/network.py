@@ -85,7 +85,7 @@ def plot_network(wn, node_attribute=None, link_attribute=None, title=None,
         Node size 
 
     node_range: list, optional
-        Node range ([None,None] indicates autoscale)
+        Node color range ([None,None] indicates autoscale)
         
     node_alpha: int, optional
         Node transparency
@@ -100,7 +100,7 @@ def plot_network(wn, node_attribute=None, link_attribute=None, title=None,
         Link width
 		
     link_range : list, optional
-        Link range ([None,None] indicates autoscale)
+        Link color range ([None,None] indicates autoscale)
 		
     link_alpha : int, optional
         Link transparency
@@ -140,7 +140,7 @@ def plot_network(wn, node_attribute=None, link_attribute=None, title=None,
         ax = plt.gca()
         
     # Graph
-    G = wn.get_graph()
+    G = wn.to_graph()
     if not directed:
         G = G.to_undirected()
 
@@ -159,7 +159,7 @@ def plot_network(wn, node_attribute=None, link_attribute=None, title=None,
             add_node_colorbar = False
         
         if node_cmap is None:
-            node_cmap = plt.cm.Spectral_r
+            node_cmap = plt.get_cmap('Spectral_r')
         elif isinstance(node_cmap, list):
             if len(node_cmap) == 1:
                 node_cmap = node_cmap*2
@@ -181,7 +181,7 @@ def plot_network(wn, node_attribute=None, link_attribute=None, title=None,
             add_link_colorbar = False
 
         if link_cmap is None:
-            link_cmap = plt.cm.Spectral_r
+            link_cmap = plt.get_cmap('Spectral_r')
         elif isinstance(link_cmap, list):
             if len(link_cmap) == 1:
                 link_cmap = link_cmap*2
@@ -212,7 +212,7 @@ def plot_network(wn, node_attribute=None, link_attribute=None, title=None,
             nodelist=nodelist, node_color=nodecolor, node_size=node_size, 
             alpha=node_alpha, cmap=node_cmap, vmin=node_range[0], vmax = node_range[1], 
             linewidths=0, ax=ax)
-    edges = nx.draw_networkx_edges(G, pos, edgelist=linklist, 
+    edges = nx.draw_networkx_edges(G, pos, edgelist=linklist, arrows=directed,
             edge_color=linkcolor, width=link_width, alpha=link_alpha, edge_cmap=link_cmap, 
             edge_vmin=link_range[0], edge_vmax=link_range[1], ax=ax)
     if node_labels:
@@ -228,21 +228,20 @@ def plot_network(wn, node_attribute=None, link_attribute=None, title=None,
         clb = plt.colorbar(nodes, shrink=0.5, pad=0, ax=ax)
         clb.ax.set_title(node_colorbar_label, fontsize=10)
     if add_link_colorbar and link_attribute:
-        if directed:
-            vmin = min(map(abs,link_attribute.values()))
-            vmax = max(map(abs,link_attribute.values())) 
-            sm = plt.cm.ScalarMappable(cmap=link_cmap, norm=plt.Normalize(vmin=vmin, vmax=vmax))
-            sm.set_array([])
-            clb = plt.colorbar(sm, shrink=0.5, pad=0.05, ax=ax)
-        else:
-            clb = plt.colorbar(edges, shrink=0.5, pad=0.05, ax=ax)
+        vmin = min(map(abs,link_attribute.values()))
+        vmax = max(map(abs,link_attribute.values())) 
+        sm = plt.cm.ScalarMappable(cmap=link_cmap, norm=plt.Normalize(vmin=vmin, vmax=vmax))
+        sm.set_array([])
+        clb = plt.colorbar(sm, shrink=0.5, pad=0.05, ax=ax)
         clb.ax.set_title(link_colorbar_label, fontsize=10)
         
     ax.axis('off')
     
     if filename:
         plt.savefig(filename)
-        
+    
+    plt.show(block=False)
+    
     return ax
 
 def plot_interactive_network(wn, node_attribute=None, node_attribute_name = 'Value', title=None,
@@ -251,7 +250,8 @@ def plot_interactive_network(wn, node_attribute=None, node_attribute_name = 'Val
                figsize=[700, 450], round_ndigits=2, add_to_node_popup=None, 
                filename='plotly_network.html', auto_open=True):
     """
-    Create an interactive scalable network graphic using plotly.  
+    Create an interactive scalable network graphic using plotly. 
+
     Parameters
     ----------
     wn : wntr WaterNetworkModel
@@ -312,7 +312,7 @@ def plot_interactive_network(wn, node_attribute=None, node_attribute_name = 'Val
         raise ImportError('plotly is required')
         
     # Graph
-    G = wn.get_graph()
+    G = wn.to_graph()
     
     # Node attribute
     if node_attribute is not None:
@@ -432,7 +432,8 @@ def plot_leaflet_network(wn, node_attribute=None, link_attribute=None,
                add_to_node_popup=None, add_to_link_popup=None,
                filename='leaflet_network.html'):
     """
-    Create an interactive scalable network graphic on a Leaflet map using folium.  
+    Create an interactive scalable network graphic on a Leaflet map using folium.
+
     Parameters
     ----------
     wn : wntr WaterNetworkModel
@@ -545,7 +546,7 @@ def plot_leaflet_network(wn, node_attribute=None, link_attribute=None,
             link_colors, link_bins  = pd.qcut(link_attribute, len(link_cmap), 
                                               labels=link_cmap, retbins =True)
         
-    G = wn.get_graph()
+    G = wn.to_graph()
     pos = nx.get_node_attributes(G,'pos')
     center = pd.DataFrame(pos).mean(axis=1)
     
@@ -665,6 +666,7 @@ def network_animation(wn, node_attribute=None, link_attribute=None, title=None,
                add_colorbar=True, directed=False, ax=None, repeat=True):
     """
     Create a network animation
+    
     Parameters
     ----------
     wn : wntr WaterNetworkModel

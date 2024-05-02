@@ -1,3 +1,5 @@
+"""WNTR Simulator hydraulics model."""
+
 import pandas as pd
 import numpy as np
 import scipy.sparse as sparse
@@ -6,7 +8,7 @@ import warnings
 import logging
 from wntr.network.model import WaterNetworkModel
 from wntr.network.base import NodeType, LinkType, LinkStatus
-from wntr.network.elements import Junction, Tank, Reservoir, Pipe, HeadPump, PowerPump, PRValve, PSValve, FCValve, \
+from wntr.network.elements import Junction, Tank, Reservoir, Pipe, Pump, HeadPump, PowerPump, PRValve, PSValve, FCValve, \
     TCValve, GPValve, PBValve
 from collections import OrderedDict
 from wntr.utils.ordered_set import OrderedSet
@@ -102,7 +104,7 @@ def create_hydraulic_model(wn, HW_approx='default'):
     return m, model_updater
 
 
-def update_model_for_controls(m, wn, model_updater, control_manager):
+def update_model_for_controls(m, wn, model_updater, change_tracker):
     """
 
     Parameters
@@ -110,11 +112,11 @@ def update_model_for_controls(m, wn, model_updater, control_manager):
     m: wntr.aml.Model
     wn: wntr.network.WaterNetworkModel
     model_updater: wntr.models.utils.ModelUpdater
-    control_manager: wntr.network.controls.ControlManager
+    change_tracker: wntr.network.controls.ControlChangeTracker
     """
-    for obj, attr in control_manager.get_changes():
+    for obj, attr in change_tracker.get_changes(ref_point='model'):
         model_updater.update(m, wn, obj, attr)
-    # TODO: update model for isolated junctions and links
+    change_tracker.reset_reference_point(key='model')
 
 
 def update_model_for_isolated_junctions_and_links(m, wn, model_updater, prev_isolated_junctions, prev_isolated_links,
@@ -215,6 +217,7 @@ def initialize_results_dict(wn):
     link_res['flowrate'] = OrderedDict((name, list()) for name, obj in wn.links())
     link_res['velocity'] = OrderedDict((name, list()) for name, obj in wn.links())
     link_res['status'] = OrderedDict((name, list()) for name, obj in wn.links())
+    link_res['setting'] = OrderedDict((name, list()) for name, obj in wn.links())
 
     return node_res, link_res
 
@@ -252,12 +255,14 @@ def save_results(wn, node_res, link_res):
         link_res['flowrate'][name].append(link.flow)
         link_res['velocity'][name].append(abs(link.flow)*4.0 / (math.pi*link.diameter**2))
         link_res['status'][name].append(link.status)
+        link_res['setting'][name].append(link.roughness)
 
     for name, link in wn.head_pumps():
         link_res['flowrate'][name].append(link.flow)
         link_res['velocity'][name].append(0)
         link_res['status'][name].append(link.status)
-
+        link_res['setting'][name].append(1)
+        
         A, B, C = link.get_head_curve_coefficients()
         if link.flow > (A/B)**(1.0/C):
             start_node_name = link.start_node_name
@@ -275,11 +280,13 @@ def save_results(wn, node_res, link_res):
         link_res['flowrate'][name].append(link.flow)
         link_res['velocity'][name].append(0)
         link_res['status'][name].append(link.status)
+        link_res['setting'][name].append(1) # power pumps have no speed
 
     for name, link in wn.valves():
         link_res['flowrate'][name].append(link.flow)
         link_res['velocity'][name].append(abs(link.flow)*4.0 / (math.pi*link.diameter**2))
         link_res['status'][name].append(link.status)
+        link_res['setting'][name].append(link.setting)
 
 
 def get_results(wn, results, node_res, link_res):
@@ -306,7 +313,30 @@ def get_results(wn, results, node_res, link_res):
         link_res[key] = pd.DataFrame(data=np.array([link_res[key][name] for name in link_names]).transpose(), index=results.time,
                                             columns=link_names)
     results.link = link_res
-
+    
+    # Add headloss to results.link -- removed for now, this is slow
+    #headloss = pd.DataFrame(data=None, index=results.time, columns=link_names)
+    # for name, link in wn.links():
+    #     start_node = link.start_node_name
+    #     end_node = link.end_node_name
+    #     start_head = results.node['head'].loc[:,start_node]
+    #     end_head = results.node['head'].loc[:,end_node]
+    #     if isinstance(link, Pipe):
+    #         # Unit headloss for pipes
+    #         headloss.loc[:,name] = abs(end_head - start_head)/link.length
+    #     elif isinstance(link, Pump):
+    #         # Negative of head gain for pumps 
+    #         head_gain = -(end_head - start_head)
+    #         head_gain[head_gain > 0] = 0
+    #         headloss.loc[:,name] = head_gain
+    #     else:
+    #         # Total head loss for valves
+    #         headloss.loc[:,name] = (end_head - start_head)
+            
+    #     # Headloss is 0 if the link is closed
+    #     headloss.loc[results.link['status'].loc[:,name] == 0,name] = 0
+        
+    #results.link['headloss'] = headloss
 
 def store_results_in_network(wn, m):
     """
@@ -321,9 +351,11 @@ def store_results_in_network(wn, m):
     for name, link in wn.links():
         if link._is_isolated:
             link._flow = 0
-            link
         else:
             link._flow = m.flow[name].value
+
+    for name, link in wn.valves():
+        link._setting = m.valve_setting[name].value
 
     for name, node in wn.junctions():
         if node._is_isolated:

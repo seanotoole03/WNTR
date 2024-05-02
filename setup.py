@@ -1,15 +1,20 @@
 from setuptools import setup, find_packages
 from setuptools.extension import Extension
-import numpy
 import os
 import re
+import sys
 
 use_swig = False
-build = False
+build = True
+
+if '--no-build' in sys.argv:
+    build = False
+    sys.argv.remove('--no-build')
 
 extension_modules = list()
-
 if build:
+    import numpy
+
     try:
         numpy_include = numpy.get_include()
     except AttributeError:
@@ -67,7 +72,7 @@ AUTHOR = 'WNTR Developers'
 MAINTAINER_EMAIL = 'kaklise@sandia.gov'
 LICENSE = 'Revised BSD'
 URL = 'https://github.com/USEPA/WNTR'
-DEPENDENCIES = ['numpy', 'scipy', 'networkx', 'pandas', 'matplotlib']
+DEPENDENCIES = ['numpy>=1.21', 'scipy', 'networkx', 'pandas', 'matplotlib', 'setuptools']
 
 # use README file as the long description
 file_dir = os.path.abspath(os.path.dirname(__file__))
@@ -83,6 +88,8 @@ with open(os.path.join(file_dir, 'wntr', '__init__.py')) as f:
         VERSION = version_match.group(1)
     else:
         raise RuntimeError("Unable to find version string.")
+
+print(extension_modules)
 
 setup(name=DISTNAME,
       version=VERSION,

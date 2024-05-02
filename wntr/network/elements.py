@@ -2,31 +2,6 @@
 The wntr.network.elements module includes elements of a water network model, 
 including junction, tank, reservoir, pipe, pump, valve, pattern, timeseries, 
 demands, curves, and sources.
-
-.. rubric:: Contents
-
-.. autosummary::
-
-    Junction
-    Tank
-    Reservoir
-    Pipe
-    Pump
-    HeadPump
-    PowerPump
-    Valve
-    PRValve
-    PSValve
-    PBValve
-    FCValve
-    TCValve
-    GPValve
-    Pattern
-    TimeSeries
-    Demands
-    Curve
-    Source
-
 """
 import numpy as np
 import sys
@@ -75,17 +50,15 @@ class Junction(Node):
 
         name
         node_type
-        head
-        demand
+        base_demand
         demand_timeseries_list
         elevation
-        required_pressure
-        minimum_pressure
-        pressure_exponent
-        emitter_coefficient
-        base_demand
         coordinates
+        emitter_coefficient
         initial_quality
+        minimum_pressure
+        required_pressure
+        pressure_exponent
         tag
 
     .. rubric:: Read-only simulation results
@@ -102,6 +75,19 @@ class Junction(Node):
         leak_discharge_coeff
     
     """
+
+    # base and optional attributes used to create a Junction in _from_dict
+    # base attributes are used in add_junction
+    _base_attributes = ["name", 
+                        "elevation", 
+                        "coordinates"]
+    _optional_attributes = ["emitter_coefficient",
+                            "initial_quality", 
+                            "minimum_pressure", 
+                            "required_pressure", 
+                            "pressure_exponent", 
+                            "tag"]
+
     def __init__(self, name, wn):
         super(Junction, self).__init__(wn, name)
         self._demand_timeseries_list = Demands(self._pattern_reg)
@@ -190,7 +176,6 @@ class Junction(Node):
     def nominal_pressure(self):
         """deprecated - use required pressure"""
         raise DeprecationWarning('The nominal_pressure property has been renamed required_pressure. Please update your code')
-
     @nominal_pressure.setter
     def nominal_pressure(self, value):
         """deprecated - use required pressure"""
@@ -227,7 +212,6 @@ class Junction(Node):
         if len(self.demand_timeseries_list) > 0:
             return self.demand_timeseries_list[0].base_value
         return 0.0
-
     @base_demand.setter
     def base_demand(self, value):
         raise RuntimeWarning('The base_demand property is read-only. Please modify using demand_timeseries_list[0].base_value.')
@@ -401,7 +385,25 @@ class Tank(Node):
         leak_discharge_coeff
 
     """
-
+    
+    # base and optional attributes used to create a Tank in _from_dict
+    # base attributes are used in add_tank
+    _base_attributes = ["name", 
+                        "elevation", 
+                        "init_level",
+                        "min_level",
+                        "max_level", 
+                        "diameter",
+                        "min_vol"
+                        "vol_curve_name",
+                        "overflow", 
+                        "coordinates"]
+    _optional_attributes = ["initial_quality",
+                            "mixing_fraction",
+                            "mixing_model", 
+                            "bulk_coeff", 
+                            "tag"]
+    
     def __init__(self, name, wn):
         super(Tank, self).__init__(wn, name)
         self._elevation=0.0
@@ -562,9 +564,9 @@ class Tank(Node):
     def overflow(self, value):
         if isinstance(value, six.string_types):
             value = value.upper()
-            if value in ["YES", "TRUE"]:
+            if value in ["YES", "TRUE", "1"]:
                 value = True
-            elif value in ["NO", "FALSE"]:
+            elif value in ["NO", "FALSE", "0"]:
                 value = False
             else:
                 raise ValueError('The overflow entry must "YES" or "NO"')
@@ -714,9 +716,9 @@ class Reservoir(Node):
         base_head
         head_pattern_name
         head_timeseries
-        tag
-        initial_quality
         coordinates
+        initial_quality
+        tag
 
     .. rubric:: Read-only simulation results
 
@@ -728,6 +730,15 @@ class Reservoir(Node):
         quality
 
     """
+    
+    # base and optional attributes used to create a Reservoir in _from_dict
+    # base attributes are used in add_reservoir
+    _base_attributes = ["name", 
+                        "base_head", 
+                        "head_pattern_name",
+                        "coordinates"]
+    _optional_attributes = ["initial_quality", 
+                            "tag"]
     
     def __init__(self, name, wn, base_head=0.0, head_pattern=None):
         super(Reservoir, self).__init__(wn, name)
@@ -807,22 +818,21 @@ class Pipe(Link):
     .. autosummary::
 
         name
-        start_node_name
-        end_node_name
         link_type
+        start_node
+        start_node_name
+        end_node
+        end_node_name
         length
         diameter
         roughness
         minor_loss
+        initial_status
         cv
         bulk_coeff
         wall_coeff
-        initial_status
-        start_node
-        end_node
-        tag
         vertices
-
+        tag
 
     .. rubric:: Read-only simulation results
 
@@ -837,7 +847,23 @@ class Pipe(Link):
         status
 
     """
-
+    
+    # base and optional attributes used to create a Pipe in _from_dict
+    # base attributes are used in add_pipe
+    _base_attributes = ["name",
+                        "start_node_name",
+                        "end_node_name",
+                        "length",
+                        "diameter",
+                        "roughness",
+                        "minor_loss",
+                        "initial_status",
+                        "check_valve"]
+    _optional_attributes = ["bulk_coeff",
+                            "wall_coeff",
+                            "vertices",
+                            "tag"]
+    
     def __init__(self, name, start_node_name, end_node_name, wn):
         super(Pipe, self).__init__(wn, name, start_node_name, end_node_name)
         self._length = 304.8
@@ -854,7 +880,7 @@ class Pipe(Link):
     def __repr__(self):
         return "<Pipe '{}' from '{}' to '{}', length={}, diameter={}, roughness={}, minor_loss={}, check_valve={}, status={}>".format(self._link_name,
                        self.start_node, self.end_node, self.length, self.diameter, 
-                       self.roughness, self.minor_loss, self.cv, str(self.status))
+                       self.roughness, self.minor_loss, self.check_valve, str(self.status))
     
     def _compare(self, other):
         if not super(Pipe, self)._compare(other):
@@ -863,7 +889,7 @@ class Pipe(Link):
            abs(self.diameter      - other.diameter)<1e-9   and \
            abs(self.roughness     - other.roughness)<1e-9  and \
            abs(self.minor_loss    - other.minor_loss)<1e-9 and \
-           self.cv               == other.cv                and \
+           self.check_valve  == other.check_valve                and \
            self.bulk_coeff   == other.bulk_coeff    and \
            self.wall_coeff   == other.wall_coeff:
             return True
@@ -913,7 +939,7 @@ class Pipe(Link):
     @cv.setter
     def cv(self, value): 
         self._cv = value
-
+        
     @property
     def bulk_coeff(self):
         """float or None : if not None, then a pipe specific bulk reaction coefficient"""
@@ -984,15 +1010,16 @@ class Pump(Link):
         start_node_name
         end_node
         end_node_name
+        base_speed
+        speed_pattern_name
+        speed_timeseries
         initial_status
         initial_setting
-        speed_timeseries
         efficiency
         energy_price
         energy_pattern
-        tag
         vertices
-
+        tag
 
     .. rubric:: Read-only simulation results
 
@@ -1006,7 +1033,25 @@ class Pump(Link):
         setting
 
     """
-
+    
+    # base and optional attributes used to create a Pump in _from_dict
+    # base attributes are used in add_pump
+    _base_attributes = ["name",
+                        "start_node_name",
+                        "end_node_name",
+                        "pump_type",
+                        "pump_curve_name",
+                        "power"
+                        "base_speed",
+                        "speed_pattern_name",
+                        "initial_status"]
+    _optional_attributes = ["initial_setting",
+                            "efficiency",
+                            "energy_pattern",
+                            "energy_price",
+                            "vertices",
+                            "tag"]
+    
     def __init__(self, name, start_node_name, end_node_name, wn):
         super(Pump, self).__init__(wn, name, start_node_name, end_node_name)
         self._speed_timeseries = TimeSeries(wn._pattern_reg, 1.0)
@@ -1015,7 +1060,6 @@ class Pump(Link):
         self._efficiency = None
         self._energy_price = None 
         self._energy_pattern = None
-        self._power_outage = LinkStatus.Open
         self._outage_rule_name = name+'_outage'
         self._after_outage_rule_name = name+'_after_outage'
 
@@ -1052,8 +1096,6 @@ class Pump(Link):
     def status(self):
         """LinkStatus : the current status of the pump"""
         if self._internal_status == LinkStatus.Closed:
-            return LinkStatus.Closed
-        elif self._power_outage == LinkStatus.Closed:
             return LinkStatus.Closed
         else:
             return self._user_status
@@ -1111,9 +1153,7 @@ class Pump(Link):
             For example, the pump opens based on the level of a specific tank.
         """
         from wntr.network.controls import ControlAction, SimTimeCondition, AndCondition, Rule
-        
-        self._power_outage = True
-        
+
         # Outage
         act = ControlAction(self, 'status', LinkStatus.Closed)
         cond1 = SimTimeCondition(wn, 'Above' , start_time)
@@ -1141,7 +1181,6 @@ class Pump(Link):
         wn : :class:`~wntr.network.model.WaterNetworkModel`
            Water network model
         """
-        self._power_outage = False
         
         wn._discard_control(self._outage_rule_name)
         wn._discard_control(self._after_outage_rule_name)
@@ -1183,17 +1222,18 @@ class HeadPump(Pump):
         start_node_name
         end_node
         end_node_name
+        base_speed
+        speed_pattern_name
+        speed_timeseries
         initial_status
         initial_setting
         pump_type
         pump_curve_name
-        speed_timeseries
         efficiency
         energy_price
         energy_pattern
-        tag
         vertices
-
+        tag
 
     .. rubric:: Read-only simulation results
 
@@ -1207,6 +1247,7 @@ class HeadPump(Pump):
         setting
 
     """
+
 #    def __init__(self, name, start_node_name, end_node_name, wn):
 #        super(HeadPump,self).__init__(name, start_node_name, 
 #                                      end_node_name, wn)
@@ -1214,7 +1255,7 @@ class HeadPump(Pump):
 #        self._coeffs_curve_points = None # these are used to verify whether
 #                                         # the pump curve was changed since
 #                                         # the _curve_coeffs were calculated
-    
+
     def __repr__(self):
         return "<Pump '{}' from '{}' to '{}', pump_type='{}', pump_curve={}, speed={}, status={}>".format(self._link_name,
                    self.start_node, self.end_node, 'HEAD', self.pump_curve_name, 
@@ -1224,7 +1265,7 @@ class HeadPump(Pump):
         if not super(HeadPump, self)._compare(other):
             return False
         if self.pump_type == other.pump_type and \
-           self.get_pump_curve() == other.get_pump_curve():
+           self.pump_curve_name == other.pump_curve_name:
             return True
         return False
     
@@ -1401,17 +1442,18 @@ class PowerPump(Pump):
         start_node_name
         end_node
         end_node_name
+        base_speed
+        speed_pattern_name
+        speed_timeseries
         initial_status
         initial_setting
         pump_type
         power
-        speed_timeseries
         efficiency
         energy_price
         energy_pattern
-        tag
         vertices
-
+        tag
 
     .. rubric:: Read-only simulation results
 
@@ -1425,7 +1467,7 @@ class PowerPump(Pump):
         setting
 
     """
-    
+
     def __repr__(self):
         return "<Pump '{}' from '{}' to '{}', pump_type='{}', power={}, speed={}, status={}>".format(self._link_name,
                    self.start_node, self.end_node, 'POWER', self._base_power, 
@@ -1435,7 +1477,7 @@ class PowerPump(Pump):
         if not super(PowerPump, self)._compare(other):
             return False
         if self.pump_type == other.pump_type and \
-           self.power == other.power:
+            abs(self.power - other.power)<1e-9:
             return True
         return False
     
@@ -1449,9 +1491,9 @@ class PowerPump(Pump):
         """float : the fixed power value"""
         return self._base_power
     @power.setter
-    def power(self, kW):
+    def power(self, value):
         self._curve_reg.remove_usage(self._pump_curve_name, (self._link_name, 'Pump'))
-        self._base_power = kW
+        self._base_power = value
 
 
 class Valve(Link):
@@ -1492,12 +1534,11 @@ class Valve(Link):
         start_node_name
         end_node
         end_node_name
+        valve_type
         initial_status
         initial_setting
-        valve_type
-        tag
         vertices
-
+        tag
 
     .. rubric:: Result attributes
 
@@ -1511,7 +1552,20 @@ class Valve(Link):
         setting
 
     """
-    
+
+    # base and optional attributes used to create a Valve in _from_dict
+    # base attributes are used in add_valve
+    _base_attributes = ["name",
+                        "start_node_name",
+                        "end_node_name",
+                        "diameter",
+                        "valve_type",
+                        "minor_loss",
+                        "initial_setting",
+                        "initial_status"]
+    _optional_attributes = ["vertices",
+                            "tag"]
+        
     def __init__(self, name, start_node_name, end_node_name, wn):
         super(Valve, self).__init__(wn, name, start_node_name, end_node_name)
         self.diameter = 0.3048
@@ -1608,7 +1662,7 @@ class PRValve(Valve):
         setting
 
     """
-    
+
     def __init__(self, name, start_node_name, end_node_name, wn):
         super(PRValve, self).__init__(name, start_node_name, end_node_name, wn)
 
@@ -1669,7 +1723,7 @@ class PSValve(Valve):
         setting
 
     """
-    
+
     def __init__(self, name, start_node_name, end_node_name, wn):
         super(PSValve, self).__init__(name, start_node_name, end_node_name, wn)
 
@@ -1730,7 +1784,7 @@ class PBValve(Valve):
         setting
 
     """
-    
+
     def __init__(self, name, start_node_name, end_node_name, wn):
         super(PBValve, self).__init__(name, start_node_name, end_node_name, wn)
 
@@ -1790,7 +1844,7 @@ class FCValve(Valve):
         setting
 
     """
-    
+
     def __init__(self, name, start_node_name, end_node_name, wn):
         super(FCValve, self).__init__(name, start_node_name, end_node_name, wn)
 
@@ -1851,7 +1905,7 @@ class TCValve(Valve):
         setting
 
     """
-    
+
     def __init__(self, name, start_node_name, end_node_name, wn):
         super(TCValve, self).__init__(name, start_node_name, end_node_name, wn)
 
@@ -1914,7 +1968,7 @@ class GPValve(Valve):
         setting
 
     """
-    
+
     def __init__(self, name, start_node_name, end_node_name, wn):
         super(GPValve, self).__init__(name, start_node_name, end_node_name, wn)
         self._headloss_curve_name = None
@@ -1970,7 +2024,7 @@ class Pattern(object):
         self.name = name
         if isinstance(multipliers, (int, float)):
             multipliers = [multipliers]
-        self._multipliers = np.array(multipliers)
+        self._multipliers = np.array(multipliers, dtype=np.float64)
         if time_options:
             if isinstance(time_options, (tuple, list)) and len(time_options) >= 2:
                 tmp = TimeOptions()
@@ -2071,7 +2125,7 @@ class Pattern(object):
             raise ValueError('Pattern->time_options must be a TimeOptions or null')
         self._time_options = object
 
-    def todict(self):
+    def to_dict(self):
         """Dictionary representation of the pattern"""
         d = dict(name=self.name, 
                  multipliers=list(self._multipliers))
@@ -2089,13 +2143,30 @@ class Pattern(object):
             Time in seconds        
         """
         nmult = len(self._multipliers)
-        if nmult == 0: return 1.0
-        if nmult == 1: return self._multipliers[0]
+        if nmult == 0:
+            return 1.0
+        if nmult == 1:
+            return self._multipliers[0]
         if self._time_options is None:
             raise RuntimeError('Pattern->time_options cannot be None at runtime')
         step = int(time//self._time_options.pattern_timestep)
-        if self.wrap:                      return self._multipliers[int(step%nmult)]
-        elif step < 0 or step >= nmult:    return 0.0
+        if self.wrap:
+            ndx = int(step%nmult)
+            last_mult = self._multipliers[ndx]
+            if self._time_options.pattern_interpolation:
+                if ndx + 1 == nmult:
+                    next_mult = self._multipliers[0]
+                else:
+                    next_mult = self._multipliers[ndx + 1]
+                last_time = step * self._time_options.pattern_timestep
+                next_time = (step + 1) * self._time_options.pattern_timestep
+                slope = (next_mult - last_mult) / (next_time - last_time)
+                intercept = next_mult - slope * next_time
+                return slope * time + intercept
+            else:
+                return last_mult
+        elif step < 0 or step >= nmult:
+            return 0.0
         return self._multipliers[step]
     
 
@@ -2149,7 +2220,7 @@ class TimeSeries(object):
         return repr(self)
 
     def __repr__(self):
-        fmt = "<TimeSeries: base={}, pattern={}, category='{}'>"
+        fmt = "<TimeSeries: base_value={}, pattern_name={}, category='{}'>"
         return fmt.format(self._base, 
                           (repr(self._pattern) if self.pattern else None),
                           str(self._category))
@@ -2214,13 +2285,13 @@ class TimeSeries(object):
             return self._base
         return self._base * self.pattern.at(time)
     
-    def todict(self):
+    def to_dict(self):
         """Dictionary representation of the time series"""
         d = dict(base_val=self._base)
-        if isinstance(self._pattern, six.string_types):
-            d['pattern_name'] = self._pattern
-        if self._category:
-            d['category'] = self._category
+        # if isinstance(self._pattern, six.string_types):
+        d['pattern_name'] = self.pattern_name
+        # if self._category:
+        d['category'] = self.category
         return d
     
 #    def tostring(self):
@@ -2350,6 +2421,12 @@ class Demands(MutableSequence):
         for dem in self._list:
                 res.append(dem.category)
         return res
+
+    def to_list(self):
+        res = []
+        for dem in self:
+            res.append(dem.to_dict())
+        return res
         
 
 class Curve(object):
@@ -2466,7 +2543,7 @@ class Curve(object):
         """Returns the number of points in the curve."""
         return len(self.points)
     
-    def todict(self):
+    def to_dict(self):
         """Dictionary representation of the curve"""
         d = dict(name=self._name, 
                  curve_type=self._curve_type,
@@ -2573,3 +2650,12 @@ class Source(object):
     @source_type.setter
     def source_type(self, value):
         self._source_type = value
+
+    def to_dict(self):
+        ret = dict()
+        ret['name'] = self.name
+        ret['node_name'] = self.node_name
+        ret['source_type'] = self.source_type
+        ret['strength'] = self.strength_timeseries.base_value
+        ret['pattern'] = self.strength_timeseries.pattern_name
+        return ret

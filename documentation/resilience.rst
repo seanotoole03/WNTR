@@ -9,8 +9,8 @@ Resilience of water distribution systems refers to the
 design, maintenance, and operations of that system.  
 All these aspects must work together to limit the effects of disasters and 
 enable rapid return to normal delivery of safe water to customers.
-Numerous resilience metrics have been suggested [USEPA14]_.  
-These metrics generally fall into five categories: topographic, hydraulic, water quality, water security, and economic [USEPA14]_.
+Numerous resilience metrics have been suggested :cite:p:`usepa14`.  
+These metrics generally fall into five categories: topographic, hydraulic, water quality, water security, and economic :cite:p:`usepa14`.
 When quantifying resilience, 
 it is important to understand which metric best defines resilience for 
 a particular scenario.  WNTR includes many metrics to help 
@@ -30,7 +30,7 @@ The following sections outline metrics that can be computed using WNTR, includin
 
 While some metrics define resilience as a single system-wide quantity, other metrics define 
 quantities that are a function of time, space, or both. 
-For this reason, state transition plots [BaRR13]_  and network graphics
+For this reason, state transition plots :cite:p:`barr13`  and network graphics
 are useful ways to visualize resilience and compare metrics, as shown in :numref:`fig-metrics`.
 In the state transition plot, the x-axis represents time (before, during, and after a disruptive incident).  
 The y-axis represents performance.  This can be any time varying resilience metric that responds to the disruptive state.  
@@ -74,7 +74,7 @@ WNTR includes additional topographic metrics to help compute resilience.
                                           measure of the number of branches in a network.  A node with degree 0 is not 
                                           connected to the network.  Terminal nodes have degree 1. A node connected to every node (including itself) 
                                           has a degree equal to the number of nodes in the network.  
-                                          The average node degree is a system wide metric used to describe the number of 
+                                          The average node degree is a system-wide metric used to describe the number of 
                                           connected links in a network.
 
    Link density                           Link density is the ratio between the total number of links and the maximum 
@@ -114,7 +114,7 @@ WNTR includes additional topographic metrics to help compute resilience.
    Shortest path lengths                  Shortest path lengths is the minimum number of links between a source node and all 
                                           other nodes in the network.  Shortest path length is a value between 0 and 
                                           the number of links in the network.
-                                          The average shortest path length is a system wide metric used to describe the number
+                                          The average shortest path length is a system-wide metric used to describe the number
                                           of links between a node and all other nodes.
 										  
    Valve segmentation                     Valve segmentation groups links and nodes into segments based on the location of isolation valves. 
@@ -150,7 +150,7 @@ graph or a graph with a single edge between two nodes.
     >>> import wntr # doctest: +SKIP
 	
     >>> wn = wntr.network.WaterNetworkModel('networks/Net3.inp') # doctest: +SKIP
-    >>> G = wn.get_graph() # directed multigraph
+    >>> G = wn.to_graph() # directed multigraph
     >>> uG = G.to_undirected() # undirected multigraph
     >>> sG = nx.Graph(uG) # undirected simple graph (single edge between two nodes)
 
@@ -212,8 +212,8 @@ use NetworkX directly, while others use metrics included in WNTR.
       >>> sim = wntr.sim.EpanetSimulator(wn)
       >>> results = sim.run_sim()
       
-      >>> flowrate = results.link['flowrate']
-      >>> G = wn.get_graph(link_weight=flowrate)
+      >>> flowrate = results.link['flowrate'].iloc[-1,:] # flowrate from the last timestep
+      >>> G = wn.to_graph(link_weight=flowrate, modify_direction=True)
       >>> all_paths = nx.all_simple_paths(G, '119', '193')
 
 * Valve segmentation, where each valve is defined by a node and link pair (see :ref:`valvelayer`)
@@ -230,8 +230,8 @@ use NetworkX directly, while others use metrics included in WNTR.
 
       >>> average_expected_demand = wntr.metrics.average_expected_demand(wn)
       >>> link_lengths = wn.query_link_attribute('length')
-      >>> valve_attributes = wntr.metrics.valve_segment_attributes(valve_layer, node_segments, 
-      ...     link_segments, average_expected_demand, link_lengths)
+      >>> valve_attributes = wntr.metrics.valve_segment_attributes(valve_layer, 
+      ...     node_segments, link_segments, average_expected_demand, link_lengths)
 
 ..
 	Clustering coefficient: Clustering coefficient is the ratio between the total number of triangles and 
@@ -250,7 +250,7 @@ use NetworkX directly, while others use metrics included in WNTR.
 	Node-pair reliability: Node-pair reliability (NPR) is the probability that any two nodes 
 	are connected in a network. NPR is computed using ...
 	Connectivity will change at each timestep, depending on the flow direction.  
-	The method :class:`~wntr.network.model.WaterNetworkModel.get_graph` method 
+	The method :class:`~wntr.network.model.WaterNetworkModel.to_graph` method 
 	can be used to weight the graph by a specified attribute. 
 	
 	Critical ratio of defragmentation: Critical ratio of defragmentation is the threshold where the network loses its large-scale connectivity and defragments, as a function of the node degree. The critical ratio of 
@@ -279,32 +279,42 @@ Hydraulic metrics included in WNTR are listed in  :numref:`table-hydraulic-metri
    
    Demand                                 To determine the number of node-time pairs above or below a specified demand threshold, 
                                           use the :class:`~wntr.metrics.misc.query` method on results.node['demand']. 
-                                          This method can be used to compute the fraction of delivered demand, from [OsKS02]_.
+                                          This method can be used to compute the fraction of delivered demand, from :cite:p:`osks02`.
 										  
    Water service availability             Water service availability is the ratio of delivered demand to the expected demand.  
                                           This metric can be computed as a function of time or space using the :class:`~wntr.metrics.hydraulic.water_service_availability` method.
-                                          This method can be used to compute the fraction of delivered volume, from [OsKS02]_.
+                                          This method can be used to compute the fraction of delivered volume, from :cite:p:`osks02`.
 										  
-   Todini index                           The Todini index [Todi00]_ is related to the capability of a system to overcome 
-                                          failures while still meeting demands and pressures at the nodes. The 
+   Todini index                           The Todini index :cite:p:`todi00` is related to the capability of a system to overcome 
+                                          failures while still meeting demands and pressures at nodes. The 
                                           Todini index defines resilience at a specific time as a measure of surplus 
-                                          power at each node and measures relative energy redundancy. 
+                                          power at each node. 
                                           The Todini index can be computed using the :class:`~wntr.metrics.hydraulic.todini_index` method.
 
-   Entropy                                Entropy [AwGB90]_ is a measure of uncertainty in a random variable.  
+   Modified resilience index              The modified resilience index :cite:p:`jasr08` is similar to the Todini index, but is only computed at junctions.
+                                          The metric defines resilience at a specific time as a measure of surplus 
+                                          power at each junction or as a system average.
+                                          The modified resilience index can be computed using the :class:`~wntr.metrics.hydraulic.modified_resilience_index` method.
+
+   Tank capacity                          Tank capacity is the ratio of current water volume stored in tanks to the maximum volume of water that can be stored.
+                                          This metric is measured at each tank as a function of time and ranges between 0 and 1. 
+                                          A value of 1 indicates that tank storage is maximized, while a value of 0 means there is no water stored in the tank. 
+                                          Tank capacity can be computed using the :class:`~wntr.metrics.hydraulic.tank_capacity` method.
+   
+   Entropy                                Entropy :cite:p:`awgb90` is a measure of uncertainty in a random variable.  
                                           In a water distribution network model, the random variable is 
                                           flow in the pipes and entropy can be used to measure alternate flow paths
                                           when a network component fails.  A network that carries maximum entropy 
                                           flow is considered reliable with multiple alternate paths.
                                           Connectivity will change at each timestep, depending on the flow direction.  
-                                          The :class:`~wntr.network.model.WaterNetworkModel.get_graph` method can be used to generate a weighted graph. 
+                                          The :class:`~wntr.network.model.WaterNetworkModel.to_graph` method can be used to generate a weighted graph. 
                                           Entropy can be computed using the :class:`~wntr.metrics.hydraulic.entropy` method.
    
-   Expected demand                        Expected demand is computed at each node and timestep based on node demand, demand pattern, and demand multiplier [USEPA15]_.
+   Expected demand                        Expected demand is computed at each node and timestep based on node demand, demand pattern, and demand multiplier :cite:p:`usepa15`.
                                           The metric can be computed using the :class:`~wntr.metrics.hydraulic.expected_demand` method.  This method does not require running 
                                           a hydraulic simulation.
 										  
-   Average expected demand                Average expected demand per day is computed at each node based on node demand, demand pattern, and demand multiplier [USEPA15]_.
+   Average expected demand                Average expected demand per day is computed at each node based on node demand, demand pattern, and demand multiplier :cite:p:`usepa15`.
                                           The metric can be computed using the :class:`~wntr.metrics.hydraulic.average_expected_demand` method.  This method does not require running 
                                           a hydraulic simulation.
     
@@ -333,7 +343,7 @@ The following examples compute hydraulic metrics, including:
       >>> pressure_above_threshold = wntr.metrics.query(pressure, np.greater, 
       ...     threshold)
     
-* Water service availability (Note that for Net3, the simulated demands are never less than the expected demand, and water service availability is always 1 (for junctions that have positive demand) or NaN (for junctions that have demand equal to 0).
+* Water service availability [Note that for Net3, the simulated demands are never less than the expected demand, and water service availability is always 1 (for junctions that have positive demand) or NaN (for junctions that have demand equal to 0)].
 	
   .. doctest::
 
@@ -355,7 +365,7 @@ The following examples compute hydraulic metrics, including:
   .. doctest::
 
       >>> flowrate = results.link['flowrate'].loc[12*3600,:]
-      >>> G = wn.get_graph(link_weight=flowrate)
+      >>> G = wn.to_graph(link_weight=flowrate)
       >>> entropy, system_entropy = wntr.metrics.entropy(G)
     
 Water quality metrics
@@ -375,7 +385,7 @@ Water quality metrics included in WNTR are listed in  :numref:`table-water-quali
 
    Concentration                          To determine the number of node-time pairs above or below a specified concentration threshold, 
                                           use the :class:`~wntr.metrics.misc.query` method on results.node['quality'] after a simulation using CHEM or TRACE.
-                                          This method can be used to compute the fraction of delivered quality, from [OsKS02]_.
+                                          This method can be used to compute the fraction of delivered quality, from :cite:p:`osks02`.
 
    Population impacted                    As stated above, population that is impacted by a specific quantity can be computed using the 
                                           :class:`~wntr.metrics.misc.population_impacted` method.  This can be applied to water quality metrics.
@@ -424,7 +434,7 @@ The following examples compute water quality metrics, including:
 	
 Water security metrics
 -----------------------
-Water security metrics quantify potential consequences of contamination scenarios.  These metrics are documented in [USEPA15]_.
+Water security metrics quantify potential consequences of contamination scenarios.  These metrics are documented in :cite:p:`usepa15`.
 Water security metrics included in WNTR are listed in  :numref:`table-water-security-metrics`.  
 
 .. _table-water-security-metrics:
@@ -433,13 +443,13 @@ Water security metrics included in WNTR are listed in  :numref:`table-water-secu
    =====================================  ================================================================================================================================================
    Metric                                 Description
    =====================================  ================================================================================================================================================
-   Mass consumed                          Mass consumed is the mass of a contaminant that exits the network via node demand at each node-time pair [USEPA15]_.  
+   Mass consumed                          Mass consumed is the mass of a contaminant that exits the network via node demand at each node-time pair :cite:p:`usepa15`.  
                                           The metric can be computed using the :class:`~wntr.metrics.water_security.mass_contaminant_consumed` method.
 
-   Volume consumed                        Volume consumed is the volume of a contaminant that exits the network via node demand at each node-time pair [USEPA15]_.   
+   Volume consumed                        Volume consumed is the volume of a contaminant that exits the network via node demand at each node-time pair :cite:p:`usepa15`.   
                                           The metric can be computed using the :class:`~wntr.metrics.water_security.volume_contaminant_consumed` method.
 
-   Extent of contamination                Extent of contamination is the length of contaminated pipe at each node-time pair [USEPA15]_.  
+   Extent of contamination                Extent of contamination is the length of contaminated pipe at each node-time pair :cite:p:`usepa15`.  
                                           The metric can be computed using the :class:`~wntr.metrics.water_security.extent_contaminant` method.
 
    Population impacted                    As stated above, population that is impacted by a specific quantity can be computed using the 
@@ -473,7 +483,7 @@ The following examples use the results from the chemical water quality simulatio
       >>> flowrate = results.link['flowrate'].loc[:,wn.pipe_name_list] 
       >>> EC = wntr.metrics.extent_contaminant(quality, flowrate, wn, detection_limit)
     
-* Population impacted by mass consumed over a specified threshold.
+* Population impacted by mass consumed over a specified threshold
 
   .. doctest::
 
@@ -500,19 +510,20 @@ Economic metrics included in WNTR are listed in  :numref:`table-economic-metrics
    Metric                                 Description
    =====================================  ================================================================================================================================================
    Network cost                           Network cost is the annual maintenance and operations cost of tanks, pipes, valves, and pumps based on the equations from the Battle of 
-                                          Water Networks II [SOKZ12]_.  
+                                          Water Networks II :cite:p:`sokz12`.  
                                           Default values can be included in the calculation.
                                           Network cost can be computed 
                                           using the :class:`~wntr.metrics.economic.annual_network_cost` method.
 
-   Greenhouse gas emissions               Greenhouse gas emissions is the annual emissions associated with pipes based on equations from the Battle of Water Networks II [SOKZ12]_.
+   Greenhouse gas emissions               Greenhouse gas emissions is the annual emissions associated with pipes based on equations from the Battle of Water Networks II :cite:p:`sokz12`.
                                           Default values can be included in the calculation.
                                           Greenhouse gas emissions can be computed 
                                           using the :class:`~wntr.metrics.economic.annual_ghg_emissions` method.
 
-   Pump operating energy and cost         The energy and cost required to operate a pump can be computed using the :class:`~wntr.metrics.economic.pump_energy` and 
+   Pump operating power, energy and cost  The power, energy and cost required to operate a pump can be computed using the :class:`~wntr.metrics.economic.pump_energy`, 
+                                          :class:`~wntr.metrics.economic.pump_energy` and 
                                           :class:`~wntr.metrics.economic.pump_cost` methods. These
-                                          use the flowrates and pressures from simulation results to compute pump energy and cost.
+                                          use the flowrates and pressures from simulation results to compute pump power, energy and cost.
    =====================================  ================================================================================================================================================
 
 The following examples compute economic metrics, including:

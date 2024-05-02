@@ -1,22 +1,6 @@
 """
 The wntr.network.base module includes base classes for network elements and 
 the network model.
-
-.. rubric:: Contents
-
-.. autosummary::
-
-    Node
-    Link
-    Registry
-    NodeType
-    LinkType
-    LinkStatus
-    AbstractModel
-    Subject
-    Observer
-
-
 """
 import logging
 import six
@@ -266,17 +250,33 @@ class Node(six.with_metaclass(abc.ABCMeta, object)):
         else:
             raise ValueError('coordinates must be a 2-tuple or len-2 list')
 
-    def todict(self):
+    def to_dict(self):
         """Dictionary representation of the node"""
         d = {}
+        d['name'] = self.name
+        d['node_type'] = self.node_type
         for k in dir(self):
-            if not k.startswith('_'):
+            if not k.startswith('_') and \
+              k not in ['demand', 'base_demand', 'head', 'leak_area', 'leak_demand',
+                        'leak_discharge_coeff', 'leak_status', 'level', 'pressure', 'quality', 'vol_curve', 'head_timeseries']:
                 try:
                     val = getattr(self, k)
                     if not isinstance(val, types.MethodType):
-                        d[k] = val
+                        if hasattr(val, "to_ref"):
+                            d[k] = val.to_ref()
+                        elif hasattr(val, "to_list"):
+                            d[k] = val.to_list()
+                        elif hasattr(val, "to_dict"):
+                            d[k] = val.to_dict()
+                        elif isinstance(val, (enum.IntEnum, enum.Enum)):
+                            d[k] = str(val)
+                        else:
+                            d[k] = val
                 except DeprecationWarning: pass
         return d
+
+    def to_ref(self):
+        return self._name
 
 
 class Link(six.with_metaclass(abc.ABCMeta, object)):
@@ -382,8 +382,11 @@ class Link(six.with_metaclass(abc.ABCMeta, object)):
             return False
         if self.initial_status != other.initial_status:
             return False
-        if self.initial_setting != other.initial_setting:
-            return False
+        if (self.initial_setting is not None) ^ (other.initial_setting is not None):
+                return False 
+        elif (self.initial_setting is not None) and (other.initial_setting is not None):
+            if abs(self.initial_setting - other.initial_setting) > 1e-9:
+                return False
         if self.start_node_name != other.start_node_name:
             return False
         if self.end_node_name != other.end_node_name:
@@ -408,12 +411,9 @@ class Link(six.with_metaclass(abc.ABCMeta, object)):
     @initial_status.setter
     def initial_status(self, status):
         if not isinstance(status, LinkStatus):
-            if isinstance (status, (int, float)):
-                status = LinkStatus(int(status))
-            elif isinstance(status, str):
-                status = LinkStatus[status]
-            else: 
-                raise ValueError('initial_status must be a str, integer, or LinkStatus')
+            if isinstance(status, int): status = LinkStatus(status)
+            elif isinstance(status, str): status = LinkStatus[status]
+            else: status = LinkStatus(int(status))
         self._initial_status = status
         
     @property
@@ -528,15 +528,40 @@ class Link(six.with_metaclass(abc.ABCMeta, object)):
                 raise ValueError('vertices must be a list of 2-tuples')
         self._vertices = points
     
-    def todict(self):
+    def to_dict(self):
         """Dictionary representation of the link"""
         d = {}
+        d['name'] = self.name
+        d['link_type'] = self.link_type
+        d['start_node_name'] = self.start_node_name
+        d['end_node_name'] = self.end_node_name
+        if hasattr(self, 'pump_type'):
+            d['pump_type'] = self.pump_type
+        if hasattr(self, 'valve_type'):
+            d['valve_type'] = self.valve_type
         for k in dir(self):
-            if not k.startswith('_'):
+            if not k.startswith('_') and k not in [
+                'flow', 'cv', 'friction_factor', 'headloss',
+                'quality', 'reaction_rate', 'setting', 'status', 'velocity', 'speed_timeseries',
+            ]:
                 val = getattr(self, k)
                 if not isinstance(val, types.MethodType):
-                    d[k] = val
+                    if hasattr(val, "to_ref"):
+                        if hasattr(self, k+"_name") and getattr(self, k+"_name") is not None:
+                            continue
+                        d[k] = val.to_ref()
+                    elif hasattr(val, "to_list"):
+                        d[k] = val.to_list()
+                    elif hasattr(val, "to_dict"):
+                        d[k] = val.to_dict()
+                    elif isinstance(val, (enum.IntEnum, enum.Enum)):
+                        d[k] = str(val)
+                    else:
+                        d[k] = val
         return d
+
+    def to_ref(self):
+        return self._name
 
 
 class Registry(MutableMapping):
@@ -564,6 +589,8 @@ class Registry(MutableMapping):
         self._link_reg = wn._link_reg
         self._controls = wn._controls
         self._sources = wn._sources
+        self._cps_reg = wn._cps_reg
+        self._cps_edges = wn._cps_edges
     
     def __getitem__(self, key):
         if not key:
@@ -699,18 +726,18 @@ class Registry(MutableMapping):
         if len(self._usage[key]) < 1:
             self._usage.pop(key)
 
-    def todict(self):
+    def to_dict(self):
         """Dictionary representation of the registry"""
         d = dict()
         for k, v in self._data.items():
-            d[k] = v.todict()
+            d[k] = v.to_dict()
         return d
     
-    def tolist(self):
+    def to_list(self):
         """List representation of the registry"""
         l = list()
         for k, v in self._data.items():
-            l.append(v.todict())
+            l.append(v.to_dict())
         return l
 
 
@@ -733,10 +760,11 @@ class NodeType(enum.IntEnum):
     Tank = 2  #: node is a tank
 
     def __init__(self, val):
-        if self.name != self.name.upper():
-            self._member_map_[self.name.upper()] = self
-        if self.name != self.name.lower():
-            self._member_map_[self.name.lower()] = self
+        mmap = getattr(self, '_member_map_')
+        if self.name != str(self.name).upper():
+            mmap[str(self.name).upper()] = self
+        if self.name != str(self.name).lower():
+            mmap[str(self.name).lower()] = self
 
     def __str__(self):
         return self.name
@@ -779,10 +807,11 @@ class LinkType(enum.IntEnum):
     Valve = 9  #: a valve of any type
 
     def __init__(self, val):
-        if self.name != self.name.upper():
-            self._member_map_[self.name.upper()] = self
-        if self.name != self.name.lower():
-            self._member_map_[self.name.lower()] = self
+        mmap = getattr(self, '_member_map_')
+        if self.name != str(self.name).upper():
+            mmap[str(self.name).upper()] = self
+        if self.name != str(self.name).lower():
+            mmap[str(self.name).lower()] = self
 
     def __str__(self):
         return self.name
@@ -819,10 +848,11 @@ class LinkStatus(enum.IntEnum):
     CV = 3  #: pipe has a check valve
 
     def __init__(self, val):
-        if self.name != self.name.upper():
-            self._member_map_[self.name.upper()] = self
-        if self.name != self.name.lower():
-            self._member_map_[self.name.lower()] = self
+        mmap = getattr(self, '_member_map_')
+        if self.name != str(self.name).upper():
+            mmap[str(self.name).upper()] = self
+        if self.name != str(self.name).lower():
+            mmap[str(self.name).lower()] = self
 
     def __str__(self):
         return self.name

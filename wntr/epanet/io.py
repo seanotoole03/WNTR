@@ -1,46 +1,41 @@
 """
 The wntr.epanet.io module contains methods for reading/writing EPANET input and output files.
-
-.. rubric:: Contents
-
-.. autosummary::
-
-    InpFile
-    BinFile
-
-----
-
-
 """
 from __future__ import absolute_import
 
 import datetime
-import re
-import io
-import os, sys
-import logging
-import six
-import warnings
-import numpy as np
-import pandas as pd
 import difflib
+import io
+import logging
+import os
+import re
+import sys
+import warnings
 from collections import OrderedDict
 
-#from .time_utils import run_lineprofile
-
+import numpy as np
+import pandas as pd
+import six
 import wntr
+from wntr.epanet.exceptions import ENKeyError, ENSyntaxError, ENValueError, EpanetException
 import wntr.network
 from wntr.network.base import Link
-from wntr.network.model import WaterNetworkModel
-from wntr.network.elements import Junction, Reservoir, Tank, Pipe, Pump, Valve
+from wntr.network.controls import (AndCondition, Comparison, Control,
+                                   ControlAction, OrCondition, Rule,
+                                   SimTimeCondition, TimeOfDayCondition,
+                                   ValueCondition, _ControlType)
+from wntr.network.elements import Junction, Pipe, Pump, Reservoir, Tank, Valve
+from wntr.network.model import (Curve, Demands, LinkStatus, Pattern, Source,
+                                WaterNetworkModel)
 from wntr.network.options import Options
-from wntr.network.model import Pattern, LinkStatus, Curve, Demands, Source
-from wntr.network.controls import TimeOfDayCondition, SimTimeCondition, ValueCondition, Comparison
-from wntr.network.controls import OrCondition, AndCondition, Control, ControlAction, _ControlType, Rule
 
-from .util import FlowUnits, MassUnits, HydParam, QualParam, MixType, ResultType, EN
-from .util import to_si, from_si
-from .util import StatisticsType, QualType, PressureUnits
+from .util import (EN, FlowUnits, HydParam, MassUnits, MixType, PressureUnits,
+                   QualParam, QualType, ResultType, StatisticsType, from_si,
+                   to_si)
+
+#from .time_utils import run_lineprofile
+sys_default_enc = sys.getdefaultencoding()
+
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +93,10 @@ def _is_number(s):
     ----------
     s : anything
 
+    Returns
+    -------
+    bool
+        Input is a number
     """
 
     try:
@@ -141,8 +140,7 @@ def _str_time_to_sec(s):
             if bool(time_tuple):
                 return int(time_tuple.groups()[0])*60*60
             else:
-                raise RuntimeError("Time format in "
-                                   "INP file not recognized. ")
+                raise ENValueError(213, s)
 
 
 def _clock_time_to_sec(s, am_pm):
@@ -161,7 +159,8 @@ def _clock_time_to_sec(s, am_pm):
 
     Returns
     -------
-    Integer value of time in seconds
+    int
+        Integer value of time in seconds
 
     """
     if am_pm.upper() == 'AM':
@@ -169,7 +168,7 @@ def _clock_time_to_sec(s, am_pm):
     elif am_pm.upper() == 'PM':
         am = False
     else:
-        raise RuntimeError('am_pm option not recognized; options are AM or PM')
+        raise ENValueError(213, s, 'Ambiguous time of day')
 
     pattern1 = re.compile(r'^(\d+):(\d+):(\d+)$')
     time_tuple = pattern1.search(s)
@@ -181,7 +180,7 @@ def _clock_time_to_sec(s, am_pm):
             time_sec -= 3600*12
         if not am:
             if time_sec >= 3600*12:
-                raise RuntimeError('Cannot specify am/pm for times greater than 12:00:00')
+                raise ENValueError(213, s, 'Cannot specify am/pm for times greater than 12:00:00')
             time_sec += 3600*12
         return time_sec
     else:
@@ -194,7 +193,7 @@ def _clock_time_to_sec(s, am_pm):
                 time_sec -= 3600*12
             if not am:
                 if time_sec >= 3600 * 12:
-                    raise RuntimeError('Cannot specify am/pm for times greater than 12:00:00')
+                    raise ENValueError(213, s, 'Cannot specify am/pm for times greater than 12:00:00')
                 time_sec += 3600*12
             return time_sec
         else:
@@ -206,12 +205,11 @@ def _clock_time_to_sec(s, am_pm):
                     time_sec -= 3600*12
                 if not am:
                     if time_sec >= 3600 * 12:
-                        raise RuntimeError('Cannot specify am/pm for times greater than 12:00:00')
+                        raise ENValueError(213, s, 'Cannot specify am/pm for times greater than 12:00:00')
                     time_sec += 3600*12
                 return time_sec
             else:
-                raise RuntimeError("Time format in "
-                                   "INP file not recognized. ")
+                raise ENValueError(213, s, 'Cannot parse time')
 
 
 def _sec_to_string(sec):
@@ -240,17 +238,19 @@ class InpFile(object):
 
     def read(self, inp_files, wn=None):
         """
-        Method to read an EPANET INP file and load data into a water network model object.
+        Read an EPANET INP file and load data into a water network model object.
         Both EPANET 2.0 and EPANET 2.2 INP file options are recognized and handled.
 
         Parameters
         ----------
         inp_files : str or list
             An EPANET INP input file or list of INP files to be combined
+        wn : WaterNetworkModel, optional
+            An optional network model to append onto; by default a new model is created.
 
         Returns
         -------
-        :class:`~wntr.network.model.WaterNetworkModel`
+        WaterNetworkModel
             A water network model object
 
         """
@@ -304,99 +304,102 @@ class InpFile(object):
                         section = None
                         break
                     else:
-                        raise RuntimeError('%(fname)s:%(lnum)d: Invalid section "%(sec)s"' % edata)
+                        raise ENSyntaxError(201, line_num=lnum, line = line)
                 elif section is None and line.startswith(';'):
                     self.top_comments.append(line[1:])
                     continue
                 elif section is None:
                     logger.debug('Found confusing line: %s', repr(line))
-                    raise RuntimeError('%(fname)s:%(lnum)d: Non-comment outside of valid section!' % edata)
+                    raise ENSyntaxError(201, line_num=lnum, line=line)
                 # We have text, and we are in a section
                 self.sections[section].append((lnum, line))
 
         # Parse each of the sections
         # The order of operations is important as certain things require prior knowledge
+        try:
 
-        ### OPTIONS
-        self._read_options()
+            ### OPTIONS
+            self._read_options()
 
-        ### TIMES
-        self._read_times()
+            ### TIMES
+            self._read_times()
 
-        ### CURVES
-        self._read_curves()
+            ### CURVES
+            self._read_curves()
 
-        ### PATTERNS
-        self._read_patterns()
+            ### PATTERNS
+            self._read_patterns()
 
-        ### JUNCTIONS
-        self._read_junctions()
+            ### JUNCTIONS
+            self._read_junctions()
 
-        ### RESERVOIRS
-        self._read_reservoirs()
+            ### RESERVOIRS
+            self._read_reservoirs()
 
-        ### TANKS
-        self._read_tanks()
+            ### TANKS
+            self._read_tanks()
 
-        ### PIPES
-        self._read_pipes()
+            ### PIPES
+            self._read_pipes()
 
-        ### PUMPS
-        self._read_pumps()
+            ### PUMPS
+            self._read_pumps()
 
-        ### VALVES
-        self._read_valves()
+            ### VALVES
+            self._read_valves()
 
-        ### COORDINATES
-        self._read_coordinates()
+            ### COORDINATES
+            self._read_coordinates()
 
-        ### SOURCES
-        self._read_sources()
+            ### SOURCES
+            self._read_sources()
 
-        ### STATUS
-        self._read_status()
+            ### STATUS
+            self._read_status()
 
-        ### CONTROLS
-        self._read_controls()
+            ### CONTROLS
+            self._read_controls()
 
-        ### RULES
-        self._read_rules()
+            ### RULES
+            self._read_rules()
 
-        ### REACTIONS
-        self._read_reactions()
+            ### REACTIONS
+            self._read_reactions()
 
-        ### TITLE
-        self._read_title()
+            ### TITLE
+            self._read_title()
 
-        ### ENERGY
-        self._read_energy()
+            ### ENERGY
+            self._read_energy()
 
-        ### DEMANDS
-        self._read_demands()
+            ### DEMANDS
+            self._read_demands()
 
-        ### EMITTERS
-        self._read_emitters()
-        
-        ### QUALITY
-        self._read_quality()
+            ### EMITTERS
+            self._read_emitters()
+            
+            ### QUALITY
+            self._read_quality()
 
-        self._read_mixing()
-        self._read_report()
-        self._read_vertices()
-        self._read_labels()
+            self._read_mixing()
+            self._read_report()
+            self._read_vertices()
+            self._read_labels()
 
-        ### Parse Backdrop
-        self._read_backdrop()
+            ### Parse Backdrop
+            self._read_backdrop()
 
-        ### TAGS
-        self._read_tags()
+            ### TAGS
+            self._read_tags()
 
-        # Set the _inpfile io data inside the water network, so it is saved somewhere
-        wn._inpfile = self
-        
-        ### Finish tags
-        self._read_end()
-        
+            # Set the _inpfile io data inside the water network, so it is saved somewhere
+            wn._inpfile = self
+            
+            ### Finish tags
+            self._read_end()
+        except EpanetException as e:
+            raise EpanetException(200, filename) from e
+
         return self.wn
 
     def write(self, filename, wn, units=None, version=2.2, force_coordinates=False):
@@ -431,6 +434,8 @@ class InpFile(object):
             raise ValueError('Must pass a WaterNetworkModel object')
         if units is not None and isinstance(units, str):
             units=units.upper()
+            if units=="SI":
+                raise Exception("unit cannot be 'SI'")
             self.flow_units = FlowUnits[units]
         elif units is not None and isinstance(units, FlowUnits):
             self.flow_units = units
@@ -495,13 +500,13 @@ class InpFile(object):
 
     def _write_title(self, f, wn):
         if wn.name is not None:
-            f.write('; Filename: {0}\n'.format(wn.name).encode('ascii'))
-            f.write('; WNTR: {}\n; Created: {:%Y-%m-%d %H:%M:%S}\n'.format(wntr.__version__, datetime.datetime.now()).encode('ascii'))
-        f.write('[TITLE]\n'.encode('ascii'))
+            f.write('; Filename: {0}\n'.format(wn.name).encode(sys_default_enc))
+            f.write('; WNTR: {}\n; Created: {:%Y-%m-%d %H:%M:%S}\n'.format(wntr.__version__, datetime.datetime.now()).encode(sys_default_enc))
+        f.write('[TITLE]\n'.encode(sys_default_enc))
         if hasattr(wn, 'title'):
             for line in wn.title:
-                f.write('{}\n'.format(line).encode('ascii'))
-        f.write('\n'.encode('ascii'))
+                f.write('{}\n'.format(line).encode(sys_default_enc))
+        f.write('\n'.encode(sys_default_enc))
 
     def _read_junctions(self):
 #        try:
@@ -529,8 +534,8 @@ class InpFile(object):
 #            raise e
 
     def _write_junctions(self, f, wn):
-        f.write('[JUNCTIONS]\n'.encode('ascii'))
-        f.write(_JUNC_LABEL.format(';ID', 'Elevation', 'Demand', 'Pattern').encode('ascii'))
+        f.write('[JUNCTIONS]\n'.encode(sys_default_enc))
+        f.write(_JUNC_LABEL.format(';ID', 'Elevation', 'Demand', 'Pattern').encode(sys_default_enc))
         nnames = list(wn.junction_name_list)
         # nnames.sort()
         for junction_name in nnames:
@@ -559,8 +564,8 @@ class InpFile(object):
                  'com': ';'}
             if demand_pattern is not None:
                 E['pat'] = str(demand_pattern)
-            f.write(_JUNC_ENTRY.format(**E).encode('ascii'))
-        f.write('\n'.encode('ascii'))
+            f.write(_JUNC_ENTRY.format(**E).encode(sys_default_enc))
+        f.write('\n'.encode(sys_default_enc))
 
     def _read_reservoirs(self):
         for lnum, line in self.sections['[RESERVOIRS]']:
@@ -577,8 +582,8 @@ class InpFile(object):
                                  current[2])
 
     def _write_reservoirs(self, f, wn):
-        f.write('[RESERVOIRS]\n'.encode('ascii'))
-        f.write(_RES_LABEL.format(';ID', 'Head', 'Pattern').encode('ascii'))
+        f.write('[RESERVOIRS]\n'.encode(sys_default_enc))
+        f.write(_RES_LABEL.format(';ID', 'Head', 'Pattern').encode(sys_default_enc))
         nnames = list(wn.reservoir_name_list)
         # nnames.sort()
         for reservoir_name in nnames:
@@ -590,8 +595,8 @@ class InpFile(object):
                 E['pat'] = ''
             else:
                 E['pat'] = reservoir.head_timeseries.pattern.name
-            f.write(_RES_ENTRY.format(**E).encode('ascii'))
-        f.write('\n'.encode('ascii'))
+            f.write(_RES_ENTRY.format(**E).encode(sys_default_enc))
+        f.write('\n'.encode(sys_default_enc))
 
     def _read_tanks(self):
         for lnum, line in self.sections['[TANKS]']:
@@ -626,7 +631,7 @@ class InpFile(object):
                 overflow = False
                 volume = 0.0
             else:
-                raise RuntimeError('Tank entry format not recognized.')
+                raise ENSyntaxError(201, 'Tank entry format not recognized.', line_num=lnum, line=line)
             self.wn.add_tank(current[0],
                         to_si(self.flow_units, float(current[1]), HydParam.Elevation),
                         to_si(self.flow_units, float(current[2]), HydParam.Length),
@@ -637,13 +642,13 @@ class InpFile(object):
                         curve_name, overflow)
 
     def _write_tanks(self, f, wn, version=2.2):
-        f.write('[TANKS]\n'.encode('ascii'))
+        f.write('[TANKS]\n'.encode(sys_default_enc))
         if version != 2.2:
             f.write(_TANK_LABEL.format(';ID', 'Elevation', 'Init Level', 'Min Level', 'Max Level',
-                                       'Diameter', 'Min Volume', 'Volume Curve','').encode('ascii'))
+                                       'Diameter', 'Min Volume', 'Volume Curve','').encode(sys_default_enc))
         else:
             f.write(_TANK_LABEL.format(';ID', 'Elevation', 'Init Level', 'Min Level', 'Max Level',
-                            'Diameter', 'Min Volume', 'Volume Curve','Overflow').encode('ascii'))
+                            'Diameter', 'Min Volume', 'Volume Curve','Overflow').encode(sys_default_enc))
         nnames = list(wn.tank_name_list)
         # nnames.sort()
         for tank_name in nnames:
@@ -665,8 +670,8 @@ class InpFile(object):
                     E['overflow'] = 'YES'
                     if tank.vol_curve is None:
                         E['curve'] = '*'
-            f.write(_TANK_ENTRY.format(**E).encode('ascii'))
-        f.write('\n'.encode('ascii'))
+            f.write(_TANK_ENTRY.format(**E).encode(sys_default_enc))
+        f.write('\n'.encode(sys_default_enc))
 
     def _read_pipes(self):
         for lnum, line in self.sections['[PIPES]']:
@@ -678,20 +683,20 @@ class InpFile(object):
                 minor_loss = float(current[6])
                 if current[7].upper() == 'CV':
                     link_status = LinkStatus.Open
-                    check_valve_flag = True
+                    check_valve = True
                 else:
                     link_status = LinkStatus[current[7].upper()]
-                    check_valve_flag = False
+                    check_valve = False
             elif len(current) == 7:
                 minor_loss = float(current[6])
                 link_status = LinkStatus.Open
-                check_valve_flag = False
+                check_valve = False
             elif len(current) == 6:
                 minor_loss = 0.
                 link_status = LinkStatus.Open
-                check_valve_flag = False
-
-            self.wn.add_pipe(current[0],
+                check_valve = False
+            try:
+                self.wn.add_pipe(current[0],
                         current[1],
                         current[2],
                         to_si(self.flow_units, float(current[3]), HydParam.Length),
@@ -699,12 +704,16 @@ class InpFile(object):
                         float(current[5]),
                         minor_loss,
                         link_status,
-                        check_valve_flag)
+                        check_valve)
+            except KeyError as e:
+                raise ENKeyError(203, str(e.args[0]), line_num=lnum) from e
+            except ValueError as e:
+                raise ENValueError(211, str(e.args[0]), line_num=lnum) from e
 
     def _write_pipes(self, f, wn):
-        f.write('[PIPES]\n'.encode('ascii'))
+        f.write('[PIPES]\n'.encode(sys_default_enc))
         f.write(_PIPE_LABEL.format(';ID', 'Node1', 'Node2', 'Length', 'Diameter',
-                                   'Roughness', 'Minor Loss', 'Status').encode('ascii'))
+                                   'Roughness', 'Minor Loss', 'Status').encode(sys_default_enc))
         lnames = list(wn.pipe_name_list)
         # lnames.sort()
         for pipe_name in lnames:
@@ -718,10 +727,10 @@ class InpFile(object):
                  'mloss': pipe.minor_loss,
                  'status': str(pipe.initial_status),
                  'com': ';'}
-            if pipe.cv:
+            if pipe.check_valve:
                 E['status'] = 'CV'
-            f.write(_PIPE_ENTRY.format(**E).encode('ascii'))
-        f.write('\n'.encode('ascii'))
+            f.write(_PIPE_ENTRY.format(**E).encode(sys_default_enc))
+        f.write('\n'.encode(sys_default_enc))
 
     def _read_pumps(self):
         def create_curve(curve_name):
@@ -751,7 +760,7 @@ class InpFile(object):
                 if current[i].upper() == 'HEAD':
 #                    assert pump_type is None, 'In [PUMPS] entry, specify either HEAD or POWER once.'
                     pump_type = 'HEAD'
-                    value = create_curve(current[i+1])
+                    value = create_curve(current[i+1]).name
                 elif current[i].upper() == 'POWER':
 #                    assert pump_type is None, 'In [PUMPS] entry, specify either HEAD or POWER once.'
                     pump_type = 'POWER'
@@ -761,20 +770,19 @@ class InpFile(object):
                     speed = float(current[i+1])
                 elif current[i].upper() == 'PATTERN':
 #                    assert pattern is None, 'In [PUMPS] entry, PATTERN may only be specified once.'
-                    pattern = self.wn.get_pattern(current[i+1])
+                    pattern = self.wn.get_pattern(current[i+1]).name
                 else:
-                    raise RuntimeError('Pump keyword in inp file not recognized.')
-
+                    raise ENSyntaxError(201, 'Pump keyword not recognized: {}'.format(current[i].upper()), line_num=lnum, line=line)
             if speed is None:
                 speed = 1.0
 
             if pump_type is None:
-                raise RuntimeError('Either head curve id or pump power must be specified for all pumps.')
+                raise ENSyntaxError(217, line_num=lnum, line=line)
             self.wn.add_pump(current[0], current[1], current[2], pump_type, value, speed, pattern)
 
     def _write_pumps(self, f, wn):
-        f.write('[PUMPS]\n'.encode('ascii'))
-        f.write(_PUMP_LABEL.format(';ID', 'Node1', 'Node2', 'Properties').encode('ascii'))
+        f.write('[PUMPS]\n'.encode(sys_default_enc))
+        f.write(_PUMP_LABEL.format(';ID', 'Node1', 'Node2', 'Properties').encode(sys_default_enc))
         lnames = list(wn.pump_name_list)
         # lnames.sort()
         for pump_name in lnames:
@@ -804,8 +812,8 @@ class InpFile(object):
                              ' {pattern_keyword:10s} {pattern:20s} {com:>3s}\n')
                 E['pattern_keyword'] = 'PATTERN'
                 E['pattern'] = pump.speed_timeseries.pattern.name
-            f.write(tmp_entry.format(**E).encode('ascii'))
-        f.write('\n'.encode('ascii'))
+            f.write(tmp_entry.format(**E).encode(sys_default_enc))
+        f.write('\n'.encode(sys_default_enc))
 
     def _read_valves(self):
         for lnum, line in self.sections['[VALVES]']:
@@ -817,7 +825,7 @@ class InpFile(object):
                 current.append(0.0)
             else:
                 if len(current) != 7:
-                    raise RuntimeError('The [VALVES] section of an INP file must have 6 or 7 entries.')
+                    raise ENSyntaxError(201, 'valve definitions must have 6 or 7 values', line_num=lnum, line=line)
             valve_type = current[4].upper()
             if valve_type in ['PRV', 'PSV', 'PBV']:
                 valve_set = to_si(self.flow_units, float(current[5]), HydParam.Pressure)
@@ -835,7 +843,7 @@ class InpFile(object):
                 self.wn.add_curve(curve_name, 'HEADLOSS', curve_points)
                 valve_set = curve_name
             else:
-                raise RuntimeError('VALVE type "%s" unrecognized' % valve_type)
+                raise ENSyntaxError(213, 'valve type unrecognized', line_num=lnum, line=line)
             self.wn.add_valve(current[0],
                          current[1],
                          current[2],
@@ -845,8 +853,8 @@ class InpFile(object):
                          valve_set)
 
     def _write_valves(self, f, wn):
-        f.write('[VALVES]\n'.encode('ascii'))
-        f.write(_VALVE_LABEL.format(';ID', 'Node1', 'Node2', 'Diameter', 'Type', 'Setting', 'Minor Loss').encode('ascii'))
+        f.write('[VALVES]\n'.encode(sys_default_enc))
+        f.write(_VALVE_LABEL.format(';ID', 'Node1', 'Node2', 'Diameter', 'Type', 'Setting', 'Minor Loss').encode(sys_default_enc))
         lnames = list(wn.valve_name_list)
         # lnames.sort()
         for valve_name in lnames:
@@ -856,23 +864,23 @@ class InpFile(object):
                  'node2': valve.end_node_name,
                  'diam': from_si(self.flow_units, valve.diameter, HydParam.PipeDiameter),
                  'vtype': valve.valve_type,
-                 'set': valve._setting,
+                 'set': valve.initial_setting,
                  'mloss': valve.minor_loss,
                  'com': ';'}
             valve_type = valve.valve_type
             formatter = _VALVE_ENTRY
             if valve_type in ['PRV', 'PSV', 'PBV']:
-                valve_set = from_si(self.flow_units, valve._setting, HydParam.Pressure)
+                valve_set = from_si(self.flow_units, valve.initial_setting, HydParam.Pressure)
             elif valve_type == 'FCV':
-                valve_set = from_si(self.flow_units, valve._setting, HydParam.Flow)
+                valve_set = from_si(self.flow_units, valve.initial_setting, HydParam.Flow)
             elif valve_type == 'TCV':
-                valve_set = valve._setting
+                valve_set = valve.initial_setting
             elif valve_type == 'GPV':
                 valve_set = valve.headloss_curve_name
                 formatter = _GPV_ENTRY
             E['set'] = valve_set
-            f.write(formatter.format(**E).encode('ascii'))
-        f.write('\n'.encode('ascii'))
+            f.write(formatter.format(**E).encode(sys_default_enc))
+        f.write('\n'.encode(sys_default_enc))
 
     def _read_emitters(self):
         for lnum, line in self.sections['[EMITTERS]']: # Private attribute on junctions
@@ -884,18 +892,18 @@ class InpFile(object):
             junction.emitter_coefficient = to_si(self.flow_units, float(current[1]), HydParam.EmitterCoeff)
 
     def _write_emitters(self, f, wn):
-        f.write('[EMITTERS]\n'.encode('ascii'))
+        f.write('[EMITTERS]\n'.encode(sys_default_enc))
         entry = '{:10s} {:10s}\n'
         label = '{:10s} {:10s}\n'
-        f.write(label.format(';ID', 'Flow coefficient').encode('ascii'))
+        f.write(label.format(';ID', 'Flow coefficient').encode(sys_default_enc))
         njunctions = list(wn.junction_name_list)
         # njunctions.sort()
         for junction_name in njunctions:
             junction = wn.nodes[junction_name]
             if junction.emitter_coefficient:
                 val = from_si(self.flow_units, junction.emitter_coefficient, HydParam.EmitterCoeff)
-                f.write(entry.format(junction_name, str(val)).encode('ascii'))
-        f.write('\n'.encode('ascii'))
+                f.write(entry.format(junction_name, str(val)).encode(sys_default_enc))
+        f.write('\n'.encode(sys_default_enc))
 
     ### System Operation
 
@@ -919,44 +927,44 @@ class InpFile(object):
             
 
     def _write_curves(self, f, wn):
-        f.write('[CURVES]\n'.encode('ascii'))
-        f.write(_CURVE_LABEL.format(';ID', 'X-Value', 'Y-Value').encode('ascii'))
+        f.write('[CURVES]\n'.encode(sys_default_enc))
+        f.write(_CURVE_LABEL.format(';ID', 'X-Value', 'Y-Value').encode(sys_default_enc))
         curves = list(wn.curve_name_list)
         # curves.sort()
         for curve_name in curves:
             curve = wn.get_curve(curve_name)
             if curve.curve_type == 'VOLUME':
-                f.write(';VOLUME: {}\n'.format(curve_name).encode('ascii'))
+                f.write(';VOLUME: {}\n'.format(curve_name).encode(sys_default_enc))
                 for point in curve.points:
                     x = from_si(self.flow_units, point[0], HydParam.Length)
                     y = from_si(self.flow_units, point[1], HydParam.Volume)
-                    f.write(_CURVE_ENTRY.format(name=curve_name, x=x, y=y, com=';').encode('ascii'))
+                    f.write(_CURVE_ENTRY.format(name=curve_name, x=x, y=y, com=';').encode(sys_default_enc))
             elif curve.curve_type == 'HEAD':
-                f.write(';PUMP: {}\n'.format(curve_name).encode('ascii'))
+                f.write(';PUMP: {}\n'.format(curve_name).encode(sys_default_enc))
                 for point in curve.points:
                     x = from_si(self.flow_units, point[0], HydParam.Flow)
                     y = from_si(self.flow_units, point[1], HydParam.HydraulicHead)
-                    f.write(_CURVE_ENTRY.format(name=curve_name, x=x, y=y, com=';').encode('ascii'))
+                    f.write(_CURVE_ENTRY.format(name=curve_name, x=x, y=y, com=';').encode(sys_default_enc))
             elif curve.curve_type == 'EFFICIENCY':
-                f.write(';EFFICIENCY: {}\n'.format(curve_name).encode('ascii'))
+                f.write(';EFFICIENCY: {}\n'.format(curve_name).encode(sys_default_enc))
                 for point in curve.points:
                     x = from_si(self.flow_units, point[0], HydParam.Flow)
                     y = point[1]
-                    f.write(_CURVE_ENTRY.format(name=curve_name, x=x, y=y, com=';').encode('ascii'))
+                    f.write(_CURVE_ENTRY.format(name=curve_name, x=x, y=y, com=';').encode(sys_default_enc))
             elif curve.curve_type == 'HEADLOSS':
-                f.write(';HEADLOSS: {}\n'.format(curve_name).encode('ascii'))
+                f.write(';HEADLOSS: {}\n'.format(curve_name).encode(sys_default_enc))
                 for point in curve.points:
                     x = from_si(self.flow_units, point[0], HydParam.Flow)
                     y = from_si(self.flow_units, point[1], HydParam.HeadLoss)
-                    f.write(_CURVE_ENTRY.format(name=curve_name, x=x, y=y, com=';').encode('ascii'))
+                    f.write(_CURVE_ENTRY.format(name=curve_name, x=x, y=y, com=';').encode(sys_default_enc))
             else:
-                f.write(';UNKNOWN: {}\n'.format(curve_name).encode('ascii'))
+                f.write(';UNKNOWN: {}\n'.format(curve_name).encode(sys_default_enc))
                 for point in curve.points:
                     x = point[0]
                     y = point[1]
-                    f.write(_CURVE_ENTRY.format(name=curve_name, x=x, y=y, com=';').encode('ascii'))
-            f.write('\n'.encode('ascii'))
-        f.write('\n'.encode('ascii'))
+                    f.write(_CURVE_ENTRY.format(name=curve_name, x=x, y=y, com=';').encode(sys_default_enc))
+            f.write('\n'.encode(sys_default_enc))
+        f.write('\n'.encode(sys_default_enc))
 
     def _read_patterns(self):
         _patterns = OrderedDict()
@@ -985,13 +993,13 @@ class InpFile(object):
             # If default is '1' but it does not exist, then it is constant
             # Any other default that does not exist is an error
             if self.wn.options.hydraulic.pattern is not None and self.wn.options.hydraulic.pattern != '1':
-                raise KeyError('Default pattern {} is undefined'.format(self.wn.options.hydraulic.pattern))
+                raise ENKeyError(205, self.wn.options.hydraulic.pattern)
             self.wn.options.hydraulic.pattern = None
 
     def _write_patterns(self, f, wn):
         num_columns = 6
-        f.write('[PATTERNS]\n'.encode('ascii'))
-        f.write('{:10s} {:10s}\n'.format(';ID', 'Multipliers').encode('ascii'))
+        f.write('[PATTERNS]\n'.encode(sys_default_enc))
+        f.write('{:10s} {:10s}\n'.format(';ID', 'Multipliers').encode(sys_default_enc))
         patterns = list(wn.pattern_name_list)
         # patterns.sort()
         for pattern_name in patterns:
@@ -999,12 +1007,12 @@ class InpFile(object):
             count = 0
             for i in pattern.multipliers:
                 if count % num_columns == 0:
-                    f.write('\n{:s} {:f}'.format(pattern_name, i).encode('ascii'))
+                    f.write('\n{:s} {:f}'.format(pattern_name, i).encode(sys_default_enc))
                 else:
-                    f.write(' {:f}'.format(i).encode('ascii'))
+                    f.write(' {:f}'.format(i).encode(sys_default_enc))
                 count += 1
-            f.write('\n'.encode('ascii'))
-        f.write('\n'.encode('ascii'))
+            f.write('\n'.encode(sys_default_enc))
+        f.write('\n'.encode(sys_default_enc))
 
     def _read_energy(self):
         for lnum, line in self.sections['[ENERGY]']:
@@ -1047,27 +1055,27 @@ class InpFile(object):
                 logger.warning('Unknown entry in ENERGY section: %s', line)
 
     def _write_energy(self, f, wn):
-        f.write('[ENERGY]\n'.encode('ascii'))
+        f.write('[ENERGY]\n'.encode(sys_default_enc))
         if True: #wn.energy is not None:
             if wn.options.energy.global_efficiency is not None:
-                f.write('GLOBAL EFFICIENCY      {:.4f}\n'.format(wn.options.energy.global_efficiency).encode('ascii'))
+                f.write('GLOBAL EFFICIENCY      {:.4f}\n'.format(wn.options.energy.global_efficiency).encode(sys_default_enc))
             if wn.options.energy.global_price is not None:
-                f.write('GLOBAL PRICE           {:.4f}\n'.format(to_si(self.flow_units, wn.options.energy.global_price, HydParam.Energy)).encode('ascii'))
+                f.write('GLOBAL PRICE           {:.4f}\n'.format(to_si(self.flow_units, wn.options.energy.global_price, HydParam.Energy)).encode(sys_default_enc))
             if wn.options.energy.demand_charge is not None:
-                f.write('DEMAND CHARGE          {:.4f}\n'.format(wn.options.energy.demand_charge).encode('ascii'))
+                f.write('DEMAND CHARGE          {:.4f}\n'.format(wn.options.energy.demand_charge).encode(sys_default_enc))
             if wn.options.energy.global_pattern is not None:
-                f.write('GLOBAL PATTERN         {:s}\n'.format(wn.options.energy.global_pattern).encode('ascii'))
+                f.write('GLOBAL PATTERN         {:s}\n'.format(wn.options.energy.global_pattern).encode(sys_default_enc))
         lnames = list(wn.pump_name_list)
         lnames.sort()
         for pump_name in lnames:
             pump = wn.links[pump_name]
             if pump.efficiency is not None:
-                f.write('PUMP {:10s} EFFIC   {:s}\n'.format(pump_name, pump.efficiency.name).encode('ascii'))
+                f.write('PUMP {:10s} EFFIC   {:s}\n'.format(pump_name, pump.efficiency.name).encode(sys_default_enc))
             if pump.energy_price is not None:
-                f.write('PUMP {:10s} PRICE   {:.4f}\n'.format(pump_name, to_si(self.flow_units, pump.energy_price, HydParam.Energy)).encode('ascii'))
+                f.write('PUMP {:10s} PRICE   {:.4f}\n'.format(pump_name, to_si(self.flow_units, pump.energy_price, HydParam.Energy)).encode(sys_default_enc))
             if pump.energy_pattern is not None:
-                f.write('PUMP {:10s} PATTERN {:s}\n'.format(pump_name, pump.energy_pattern).encode('ascii'))
-        f.write('\n'.encode('ascii'))
+                f.write('PUMP {:10s} PATTERN {:s}\n'.format(pump_name, pump.energy_pattern).encode(sys_default_enc))
+        f.write('\n'.encode(sys_default_enc))
 
     def _read_status(self):
         for lnum, line in self.sections['[STATUS]']:
@@ -1104,138 +1112,52 @@ class InpFile(object):
                 link.initial_status = new_status
 
     def _write_status(self, f, wn):
-        f.write('[STATUS]\n'.encode('ascii'))
-        f.write( '{:10s} {:10s}\n'.format(';ID', 'Setting').encode('ascii'))
-        for link_name, link in wn.links():
-            if isinstance(link, Pipe):
-                continue
-            if isinstance(link, Pump):
-                setting = link.initial_setting
-                if type(setting) is float and setting != 1.0:
-                    f.write('{:10s} {:10.10g}\n'.format(link_name,
-                            setting).encode('ascii'))
-            if link.initial_status in (LinkStatus.Closed,):
-                f.write('{:10s} {:10s}\n'.format(link_name,
-                        LinkStatus(link.initial_status).name).encode('ascii'))
-            if isinstance(link, wntr.network.Valve) and link.initial_status in (LinkStatus.Open, LinkStatus.Opened):
-#           if link.initial_status in (LinkStatus.Closed,):
-                f.write('{:10s} {:10s}\n'.format(link_name,
-                        LinkStatus(link.initial_status).name).encode('ascii'))
-#                if link.initial_status is LinkStatus.Active:
-#                    valve_type = link.valve_type
-#                    if valve_type in ['PRV', 'PSV', 'PBV']:
-#                        setting = from_si(self.flow_units, link.initial_setting, HydParam.Pressure)
-#                    elif valve_type == 'FCV':
-#                        setting = from_si(self.flow_units, link.initial_setting, HydParam.Flow)
-#                    elif valve_type == 'TCV':
-#                        setting = link.initial_setting
-#                    else:
-#                        continue
-#                    continue
-#                elif isinstance(link, wntr.network.Pump):
-#                    setting = link.initial_setting
-#                else: continue
-#                f.write('{:10s} {:10.10g}\n'.format(link_name,
-#                        setting).encode('ascii'))
-#        f.write('\n'.encode('ascii'))
+        f.write('[STATUS]\n'.encode(sys_default_enc))
+        f.write( '{:10s} {:10s}\n'.format(';ID', 'Setting').encode(sys_default_enc))
+
+        pnames = list(wn.pump_name_list)
+        for pump_name in pnames:
+            pump = wn.links[pump_name]
+            if pump.initial_status in (LinkStatus.Closed,):
+                f.write('{:10s} {:10s}\n'.format(pump_name, LinkStatus(pump.initial_status).name).encode(sys_default_enc))
+            else:
+                setting = pump.initial_setting
+                if isinstance(setting, float) and setting != 1.0:
+                    f.write('{:10s} {:10.7g}\n'.format(pump_name, setting).encode(sys_default_enc))
+        
+        vnames = list(wn.valve_name_list)
+        # lnames.sort()
+        for valve_name in vnames:
+            valve = wn.links[valve_name]
+            #valve_type = valve.valve_type
+
+            if valve.initial_status not in (LinkStatus.Active,): #LinkStatus.Opened, LinkStatus.Open,
+                f.write('{:10s} {:10s}\n'.format(valve_name, LinkStatus(valve.initial_status).name).encode(sys_default_enc))
+        #     if valve_type in ['PRV', 'PSV', 'PBV']:
+        #         valve_set = from_si(self.flow_units, valve.initial_setting, HydParam.Pressure)
+        #     elif valve_type == 'FCV':
+        #         valve_set = from_si(self.flow_units, valve.initial_setting, HydParam.Flow)
+        #     elif valve_type == 'TCV':
+        #         valve_set = valve.initial_setting
+        #     elif valve_type == 'GPV':
+        #         valve_set = None
+        #     if valve_set is not None:
+        #         f.write('{:10s} {:10.7g}\n'.format(valve_name, float(valve_set)).encode(sys_default_enc))
+        
+        f.write('\n'.encode(sys_default_enc))
 
     def _read_controls(self):
         control_count = 0
         for lnum, line in self.sections['[CONTROLS]']:
-            line = line.split(';')[0]
-            current = line.split()
-            if current == []:
-                continue
-            link_name = current[1]
-            link = self.wn.get_link(link_name)
-            if current[5].upper() != 'TIME' and current[5].upper() != 'CLOCKTIME':
-                node_name = current[5]
-            current = [i.upper() for i in current]
-            current[1] = link_name # don't capitalize the link name
 
-            # Create the control action object
-
-            status = current[2].upper()
-            if status == 'OPEN' or status == 'OPENED' or status == 'CLOSED' or status == 'ACTIVE':
-                setting = LinkStatus[status].value
-                action_obj = wntr.network.ControlAction(link, 'status', setting)
-            else:
-                if isinstance(link, wntr.network.Pump):
-                    action_obj = wntr.network.ControlAction(link, 'base_speed', float(current[2]))
-                elif isinstance(link, wntr.network.Valve):
-                    if link.valve_type == 'PRV' or link.valve_type == 'PSV' or link.valve_type == 'PBV':
-                        setting = to_si(self.flow_units, float(current[2]), HydParam.Pressure)
-                    elif link.valve_type == 'FCV':
-                        setting = to_si(self.flow_units, float(current[2]), HydParam.Flow)
-                    elif link.valve_type == 'TCV':
-                        setting = float(current[2])
-                    elif link.valve_type == 'GPV':
-                        setting = current[2]
-                    else:
-                        raise ValueError('Unrecognized valve type {0} while parsing control {1}'.format(link.valve_type, line))
-                    action_obj = wntr.network.ControlAction(link, 'setting', setting)
-                else:
-                    raise RuntimeError(('Links of type {0} can only have controls that change\n'.format(type(link))+
-                                        'the link status. Control: {0}'.format(line)))
-
-            # Create the control object
             control_count += 1
             control_name = 'control '+str(control_count)
-            if 'TIME' not in current and 'CLOCKTIME' not in current:
-                threshold = None
-                if 'IF' in current:
-                    node = self.wn.get_node(node_name)
-                    if current[6] == 'ABOVE':
-                        oper = np.greater
-                    elif current[6] == 'BELOW':
-                        oper = np.less
-                    else:
-                        raise RuntimeError("The following control is not recognized: " + line)
-                    # OKAY - we are adding in the elevation. This is A PROBLEM
-                    # IN THE INP WRITER. Now that we know, we can fix it, but
-                    # if this changes, it will affect multiple pieces, just an
-                    # FYI.
-                    if node.node_type == 'Junction':
-                        threshold = to_si(self.flow_units,
-                                          float(current[7]), HydParam.Pressure)# + node.elevation
-                        control_obj = Control._conditional_control(node, 'pressure', oper, threshold, action_obj, control_name)
-                    elif node.node_type == 'Tank':
-                        threshold = to_si(self.flow_units, 
-                                          float(current[7]), HydParam.HydraulicHead)# + node.elevation
-                        control_obj = Control._conditional_control(node, 'level', oper, threshold, action_obj, control_name)
-                else:
-                    raise RuntimeError("The following control is not recognized: " + line)
-#                control_name = ''
-#                for i in range(len(current)-1):
-#                    control_name = control_name + '/' + current[i]
-#                control_name = control_name + '/' + str(round(threshold, 2))
-            else:
-                if 'CLOCKTIME' not in current:  # at time
-                    if 'TIME' not in current:
-                        raise ValueError('Unrecognized line in inp file: {0}'.format(line))
-
-                    if ':' in current[5]:
-                        run_at_time = int(_str_time_to_sec(current[5]))
-                    else:
-                        run_at_time = int(float(current[5])*3600)
-                    control_obj = Control._time_control(self.wn, run_at_time, 'SIM_TIME', False, action_obj, control_name)
-#                    control_name = ''
-#                    for i in range(len(current)-1):
-#                        control_name = control_name + '/' + current[i]
-#                    control_name = control_name + '/' + str(run_at_time)
-                else:  # at clocktime
-                    if len(current) < 7:
-                        if ':' in current[5]:
-                            run_at_time = int(_str_time_to_sec(current[5]))
-                        else:
-                            run_at_time = int(float(current[5])*3600)
-                    else:
-                        run_at_time = int(_clock_time_to_sec(current[5], current[6]))
-                    control_obj = Control._time_control(self.wn, run_at_time, 'CLOCK_TIME', True, action_obj, control_name)
-#                    control_name = ''
-#                    for i in range(len(current)-1):
-#                        control_name = control_name + '/' + current[i]
-#                    control_name = control_name + '/' + str(run_at_time)
+            
+            control_obj = _read_control_line(line, self.wn, self.flow_units, control_name)
+            if control_obj is None:
+                control_count -= 1 # control was not found 
+                continue
+            
             if control_name in self.wn.control_name_list:
                 warnings.warn('One or more [CONTROLS] were duplicated in "{}"; duplicates are ignored.'.format(self.wn.name), stacklevel=0)
                 logger.warning('Control already exists: "{}"'.format(control_name))
@@ -1271,7 +1193,7 @@ class InpFile(object):
 
             return setting
 
-        f.write('[CONTROLS]\n'.encode('ascii'))
+        f.write('[CONTROLS]\n'.encode(sys_default_enc))
         # Time controls and conditional controls only
         for text, all_control in wn.controls():
             control_action = all_control._then_actions[0]
@@ -1292,7 +1214,7 @@ class InpFile(object):
                         continue
                     if isinstance(all_control._condition, TimeOfDayCondition):
                         vals['compare'] = 'CLOCKTIME'
-                    f.write(entry.format(**vals).encode('ascii'))
+                    f.write(entry.format(**vals).encode(sys_default_enc))
                 elif isinstance(all_control._condition, (ValueCondition)):
                     entry = '{ltype} {link} {setting} IF {ntype} {node} {compare} {thresh}\n'
                     vals = {'ltype': control_action._target_obj.link_type,
@@ -1313,71 +1235,22 @@ class InpFile(object):
                         vals['thresh'] = from_si(self.flow_units, threshold, HydParam.Pressure) 
                     else: 
                         raise RuntimeError('Unknown control for EPANET INP files: %s' %type(all_control))
-                    f.write(entry.format(**vals).encode('ascii'))
+                    f.write(entry.format(**vals).encode(sys_default_enc))
                 elif not isinstance(all_control, Control):
                     raise RuntimeError('Unknown control for EPANET INP files: %s' % type(all_control))
-        f.write('\n'.encode('ascii'))
+        f.write('\n'.encode(sys_default_enc))
 
     def _read_rules(self):
-        if len(self.sections['[RULES]']) > 0:
-            rules = []
-            rule = None
-            in_if = False
-            in_then = False
-            in_else = False
-            for lnum, line in self.sections['[RULES]']:
-                line = line.split(';')[0]
-                words = line.split()
-                if words == []:
-                    continue
-                if len(words) == 0:
-                    continue
-                if words[0].upper() == 'RULE':
-                    if rule is not None:
-                        rules.append(rule)
-                    rule = _EpanetRule(words[1], self.flow_units, self.mass_units)
-                    in_if = False
-                    in_then = False
-                    in_else = False
-                elif words[0].upper() == 'IF':
-                    in_if = True
-                    in_then = False
-                    in_else = False
-                    rule.add_if(line)
-                elif words[0].upper() == 'THEN':
-                    in_if = False
-                    in_then = True
-                    in_else = False
-                    rule.add_then(line)
-                elif words[0].upper() == 'ELSE':
-                    in_if = False
-                    in_then = False
-                    in_else = True
-                    rule.add_else(line)
-                elif words[0].upper() == 'PRIORITY':
-                    in_if = False
-                    in_then = False
-                    in_else = False
-                    rule.set_priority(words[1])
-                elif in_if:
-                    rule.add_if(line)
-                elif in_then:
-                    rule.add_then(line)
-                elif in_else:
-                    rule.add_else(line)
-                else:
-                    continue
-            if rule is not None:
-                rules.append(rule)
-            for rule in rules:
-                ctrl = rule.generate_control(self.wn)
-                self.wn.add_control(ctrl.name, ctrl)
-                logger.debug('Added %s', str(ctrl))
-            # wn._en_rules = '\n'.join(self.sections['[RULES]'])
-            #logger.warning('RULES are reapplied directly to an Epanet INP file on write; otherwise unsupported.')
+        rules = _EpanetRule.parse_rules_lines(self.sections['[RULES]'], self.flow_units, self.mass_units)
+        for rule in rules:
+            ctrl = rule.generate_control(self.wn)
+            self.wn.add_control(ctrl.name, ctrl)
+            logger.debug('Added %s', str(ctrl))
+        # wn._en_rules = '\n'.join(self.sections['[RULES]'])
+        #logger.warning('RULES are reapplied directly to an Epanet INP file on write; otherwise unsupported.')
 
     def _write_rules(self, f, wn):
-        f.write('[RULES]\n'.encode('ascii'))
+        f.write('[RULES]\n'.encode(sys_default_enc))
         for text, all_control in wn.controls():
             entry = '{}\n'
             if all_control.epanet_control_type == _ControlType.rule:
@@ -1385,15 +1258,15 @@ class InpFile(object):
                     all_control._name = text
                 rule = _EpanetRule('blah', self.flow_units, self.mass_units)
                 rule.from_if_then_else(all_control)
-                f.write(entry.format(str(rule)).encode('ascii'))
-        f.write('\n'.encode('ascii'))
+                f.write(entry.format(str(rule)).encode(sys_default_enc))
+        f.write('\n'.encode(sys_default_enc))
 
     def _read_demands(self):
         demand_num = 0
         has_been_read = set()
         for lnum, line in self.sections['[DEMANDS]']:
             ldata = line.split(';')
-            if len(ldata) > 1:
+            if len(ldata) > 1 and (ldata[1] != ""):
                 category = ldata[1]
             else:
                 category = None
@@ -1416,10 +1289,10 @@ class InpFile(object):
                                          pattern, category))
 
     def _write_demands(self, f, wn):
-        f.write('[DEMANDS]\n'.encode('ascii'))
+        f.write('[DEMANDS]\n'.encode(sys_default_enc))
         entry = '{:10s} {:10s} {:10s}{:s}\n'
         label = '{:10s} {:10s} {:10s}\n'
-        f.write(label.format(';ID', 'Demand', 'Pattern').encode('ascii'))
+        f.write(label.format(';ID', 'Demand', 'Pattern').encode(sys_default_enc))
         nodes = list(wn.junction_name_list)
         # nodes.sort()
         for node in nodes:
@@ -1439,8 +1312,8 @@ class InpFile(object):
                          'cat': cat }
                     if demand.pattern_name in wn.pattern_name_list:
                         E['pat'] = demand.pattern_name
-                    f.write(entry.format(E['node'], str(E['base']), E['pat'], E['cat']).encode('ascii'))
-        f.write('\n'.encode('ascii'))
+                    f.write(entry.format(E['node'], str(E['base']), E['pat'], E['cat']).encode(sys_default_enc))
+        f.write('\n'.encode(sys_default_enc))
 
     ### Water Quality
 
@@ -1460,7 +1333,7 @@ class InpFile(object):
             node.initial_quality = quality
 
     def _write_quality(self, f, wn):
-        f.write('[QUALITY]\n'.encode('ascii'))
+        f.write('[QUALITY]\n'.encode(sys_default_enc))
         entry = '{:10s} {:10s}\n'
         label = '{:10s} {:10s}\n'
         nnodes = list(wn.nodes.keys())
@@ -1474,8 +1347,8 @@ class InpFile(object):
                     quality = from_si(self.flow_units, node.initial_quality, QualParam.WaterAge)
                 else:
                     quality = node.initial_quality
-                f.write(entry.format(node_name, str(quality)).encode('ascii'))
-        f.write('\n'.encode('ascii'))
+                f.write(entry.format(node_name, str(quality)).encode(sys_default_enc))
+        f.write('\n'.encode(sys_default_enc))
 
     def _read_reactions(self):
         BulkReactionCoeff = QualParam.BulkReactionCoeff
@@ -1528,11 +1401,11 @@ class InpFile(object):
             elif key1 == 'ROUGHNESS':
                 self.wn.options.reaction.roughness_correl = float(current[2])
             else:
-                raise RuntimeError('Reaction option not recognized: %s'%key1)
+                raise ENValueError(213, key1, line_num=lnum, line=line)
 
     def _write_reactions(self, f, wn):
-        f.write( '[REACTIONS]\n'.encode('ascii'))
-        f.write(';Type           Pipe/Tank               Coefficient\n'.encode('ascii'))
+        f.write( '[REACTIONS]\n'.encode(sys_default_enc))
+        f.write(';Type           Pipe/Tank               Coefficient\n'.encode(sys_default_enc))
         entry_int = ' {:s} {:s} {:d}\n'
         entry_float = ' {:s} {:s} {:<10.4f}\n'
         for tank_name, tank in wn.nodes(Tank):
@@ -1542,7 +1415,7 @@ class InpFile(object):
                                                    tank.bulk_coeff,
                                                    QualParam.BulkReactionCoeff,
                                                    mass_units=self.mass_units,
-                                                   reaction_order=wn.options.reaction.bulk_order)).encode('ascii'))
+                                                   reaction_order=wn.options.reaction.bulk_order)).encode(sys_default_enc))
         for pipe_name, pipe in wn.links(Pipe):
             if pipe.bulk_coeff is not None:
                 f.write(entry_float.format('BULK',pipe_name,
@@ -1550,36 +1423,36 @@ class InpFile(object):
                                                    pipe.bulk_coeff,
                                                    QualParam.BulkReactionCoeff,
                                                    mass_units=self.mass_units,
-                                                   reaction_order=wn.options.reaction.bulk_order)).encode('ascii'))
+                                                   reaction_order=wn.options.reaction.bulk_order)).encode(sys_default_enc))
             if pipe.wall_coeff is not None:
                 f.write(entry_float.format('WALL',pipe_name,
                                            from_si(self.flow_units,
                                                    pipe.wall_coeff,
                                                    QualParam.WallReactionCoeff,
                                                    mass_units=self.mass_units,
-                                                   reaction_order=wn.options.reaction.wall_order)).encode('ascii'))
-        f.write('\n'.encode('ascii'))
-#        f.write('[REACTIONS]\n'.encode('ascii'))  # EPANET GUI puts this line in here
-        f.write(entry_int.format('ORDER', 'BULK', int(wn.options.reaction.bulk_order)).encode('ascii'))
-        f.write(entry_int.format('ORDER', 'TANK', int(wn.options.reaction.tank_order)).encode('ascii'))
-        f.write(entry_int.format('ORDER', 'WALL', int(wn.options.reaction.wall_order)).encode('ascii'))
+                                                   reaction_order=wn.options.reaction.wall_order)).encode(sys_default_enc))
+        f.write('\n'.encode(sys_default_enc))
+#        f.write('[REACTIONS]\n'.encode(sys_default_enc))  # EPANET GUI puts this line in here
+        f.write(entry_int.format('ORDER', 'BULK', int(wn.options.reaction.bulk_order)).encode(sys_default_enc))
+        f.write(entry_int.format('ORDER', 'TANK', int(wn.options.reaction.tank_order)).encode(sys_default_enc))
+        f.write(entry_int.format('ORDER', 'WALL', int(wn.options.reaction.wall_order)).encode(sys_default_enc))
         f.write(entry_float.format('GLOBAL','BULK',
                                    from_si(self.flow_units,
                                            wn.options.reaction.bulk_coeff,
                                            QualParam.BulkReactionCoeff,
                                            mass_units=self.mass_units,
-                                           reaction_order=wn.options.reaction.bulk_order)).encode('ascii'))
+                                           reaction_order=wn.options.reaction.bulk_order)).encode(sys_default_enc))
         f.write(entry_float.format('GLOBAL','WALL',
                                    from_si(self.flow_units,
                                            wn.options.reaction.wall_coeff,
                                            QualParam.WallReactionCoeff,
                                            mass_units=self.mass_units,
-                                           reaction_order=wn.options.reaction.wall_order)).encode('ascii'))
+                                           reaction_order=wn.options.reaction.wall_order)).encode(sys_default_enc))
         if wn.options.reaction.limiting_potential is not None:
-            f.write(entry_float.format('LIMITING','POTENTIAL',wn.options.reaction.limiting_potential).encode('ascii'))
+            f.write(entry_float.format('LIMITING','POTENTIAL',wn.options.reaction.limiting_potential).encode(sys_default_enc))
         if wn.options.reaction.roughness_correl is not None:
-            f.write(entry_float.format('ROUGHNESS','CORRELATION',wn.options.reaction.roughness_correl).encode('ascii'))
-        f.write('\n'.encode('ascii'))
+            f.write(entry_float.format('ROUGHNESS','CORRELATION',wn.options.reaction.roughness_correl).encode(sys_default_enc))
+        f.write('\n'.encode(sys_default_enc))
 
     def _read_sources(self):
         source_num = 0
@@ -1600,10 +1473,10 @@ class InpFile(object):
                 self.wn.add_source('INP'+str(source_num), current[0], current[1], strength,  current[3])
 
     def _write_sources(self, f, wn):
-        f.write('[SOURCES]\n'.encode('ascii'))
+        f.write('[SOURCES]\n'.encode(sys_default_enc))
         entry = '{:10s} {:10s} {:10s} {:10s}\n'
         label = '{:10s} {:10s} {:10s} {:10s}\n'
-        f.write(label.format(';Node', 'Type', 'Quality', 'Pattern').encode('ascii'))
+        f.write(label.format(';Node', 'Type', 'Quality', 'Pattern').encode(sys_default_enc))
         nsources = list(wn._sources.keys())
         # nsources.sort()
         for source_name in nsources:
@@ -1620,8 +1493,8 @@ class InpFile(object):
                  'pat': ''}
             if source.strength_timeseries.pattern_name is not None:
                 E['pat'] = source.strength_timeseries.pattern_name
-            f.write(entry.format(E['node'], E['type'], str(E['quality']), E['pat']).encode('ascii'))
-        f.write('\n'.encode('ascii'))
+            f.write(entry.format(E['node'], E['type'], str(E['quality']), E['pat']).encode(sys_default_enc))
+        f.write('\n'.encode(sys_default_enc))
 
     def _read_mixing(self):
         for lnum, line in self.sections['[MIXING]']:
@@ -1638,35 +1511,35 @@ class InpFile(object):
                 tank.mixing_model = MixType.Mix2
                 tank.mixing_fraction = float(current[2])
             elif key == '2COMP' and len(current) < 3:
-                raise RuntimeError('Mixing model 2COMP requires fraction on tank %s'%tank_name)
+                raise ENSyntaxError(201, 'missing fraction for mixing', line_num=lnum, line=line)
             elif key == 'FIFO':
                 tank.mixing_model = MixType.FIFO
             elif key == 'LIFO':
                 tank.mixing_model = MixType.LIFO
 
     def _write_mixing(self, f, wn):
-        f.write('[MIXING]\n'.encode('ascii'))
-        f.write('{:20s} {:5s} {}\n'.format(';Tank ID', 'Model', 'Fraction').encode('ascii'))
+        f.write('[MIXING]\n'.encode(sys_default_enc))
+        f.write('{:20s} {:5s} {}\n'.format(';Tank ID', 'Model', 'Fraction').encode(sys_default_enc))
         lnames = list(wn.tank_name_list)
         # lnames.sort()
         for tank_name in lnames:
             tank = wn.nodes[tank_name]
             if tank._mixing_model is not None:
                 if tank._mixing_model in [MixType.Mixed, MixType.Mix1, 0]:
-                    f.write(' {:19s} MIXED\n'.format(tank_name).encode('ascii'))
+                    f.write(' {:19s} MIXED\n'.format(tank_name).encode(sys_default_enc))
                 elif tank._mixing_model in [MixType.TwoComp, MixType.Mix2, '2comp', '2COMP', 1]:
-                    f.write(' {:19s} 2COMP  {}\n'.format(tank_name, tank.mixing_fraction).encode('ascii'))
+                    f.write(' {:19s} 2COMP  {}\n'.format(tank_name, tank.mixing_fraction).encode(sys_default_enc))
                 elif tank._mixing_model in [MixType.FIFO, 2]:
-                    f.write(' {:19s} FIFO\n'.format(tank_name).encode('ascii'))
+                    f.write(' {:19s} FIFO\n'.format(tank_name).encode(sys_default_enc))
                 elif tank._mixing_model in [MixType.LIFO, 3]:
-                    f.write(' {:19s} LIFO\n'.format(tank_name).encode('ascii'))
+                    f.write(' {:19s} LIFO\n'.format(tank_name).encode(sys_default_enc))
                 elif isinstance(tank._mixing_model, str) and tank.mixing_fraction is not None:
-                    f.write(' {:19s} {} {}\n'.format(tank_name, tank._mixing_model, tank.mixing_fraction).encode('ascii'))
+                    f.write(' {:19s} {} {}\n'.format(tank_name, tank._mixing_model, tank.mixing_fraction).encode(sys_default_enc))
                 elif isinstance(tank._mixing_model, str):
-                    f.write(' {:19s} {}\n'.format(tank_name, tank._mixing_model).encode('ascii'))
+                    f.write(' {:19s} {}\n'.format(tank_name, tank._mixing_model).encode(sys_default_enc))
                 else:
                     logger.warning('Unknown mixing model: %s', tank._mixing_model)
-        f.write('\n'.encode('ascii'))
+        f.write('\n'.encode(sys_default_enc))
 
     ### Options and Reporting
 
@@ -1681,7 +1554,7 @@ class InpFile(object):
             if words is not None and len(words) > 0:
                 if len(words) < 2:
                     edata['key'] = words[0]
-                    raise RuntimeError('%(fname)s:%(lnum)-6d %(sec)13s no value provided for %(key)s' % edata)
+                    raise ENValueError(213, 'NULL', line_num=lnum, line=line)
                 key = words[0].upper()
                 if key == 'UNITS':
                     self.flow_units = FlowUnits[words[1].upper()]
@@ -1709,18 +1582,18 @@ class InpFile(object):
                                 self.mass_units = MassUnits.ug
                                 opts.quality.inpfile_units = words[2]
                             else:
-                                raise ValueError('Invalid chemical units in OPTIONS section')
+                                raise ENValueError(213, 'for chemical units', line_num=lnum, line=line)
                         else:
                             self.mass_units = MassUnits.mg
                             opts.quality.inpfile_units = 'mg/L'                            
                 elif key == 'VISCOSITY':
                     opts.hydraulic.viscosity = float(words[1])
                 elif key == 'DIFFUSIVITY':
-                    opts.hydraulic.diffusivity = float(words[1])
+                    opts.quality.diffusivity = float(words[1])
                 elif key == 'SPECIFIC':
                     opts.hydraulic.specific_gravity = float(words[2])
                 elif key == 'TRIALS':
-                    opts.hydraulic.trials = int(words[1])
+                    opts.hydraulic.trials = int(float(words[1]))
                 elif key == 'ACCURACY':
                     opts.hydraulic.accuracy = float(words[1])
                 elif key == 'HEADERROR':
@@ -1738,7 +1611,14 @@ class InpFile(object):
                     required_pressure = to_si(self.flow_units, float(words[2]), HydParam.Pressure)
                     opts.hydraulic.required_pressure = required_pressure
                 elif key == 'PRESSURE':
-                    opts.hydraulic.pressure_exponent = float(words[2])
+                    if len(words) > 2:
+                        if words[1].upper() == 'EXPONENT':
+                            opts.hydraulic.pressure_exponent = float(words[2])
+                        else:
+                            edata['key'] = ' '.join(words)
+                            raise ENSyntaxError(201, 'unknown option', line_num=lnum, line=line)
+                    else:
+                        opts.hydraulic.inpfile_pressure_units = words[1]
                 elif key == 'PATTERN':
                     opts.hydraulic.pattern = words[1]
                 elif key == 'DEMAND':
@@ -1749,16 +1629,16 @@ class InpFile(object):
                             opts.hydraulic.demand_model = words[2]
                         else:
                             edata['key'] = ' '.join(words)
-                            raise RuntimeError('%(fname)s:%(lnum)-6d %(sec)13s unknown option %(key)s' % edata)
+                            raise ENSyntaxError(201, 'unknown option', line_num=lnum, line=line)
                     else:
                         edata['key'] = ' '.join(words)
-                        raise RuntimeError('%(fname)s:%(lnum)-6d %(sec)13s no value provided for %(key)s' % edata)
+                        raise ENSyntaxError(201, 'unknown option', line_num=lnum, line=line)
                 elif key == 'EMITTER':
                     if len(words) > 2:
                         opts.hydraulic.emitter_exponent = float(words[2])
                     else:
                         edata['key'] = 'EMITTER EXPONENT'
-                        raise RuntimeError('%(fname)s:%(lnum)-6d %(sec)13s no value provided for %(key)s' % edata)
+                        raise ENSyntaxError(201, 'unknown option', line_num=lnum, line=line)
                 elif key == 'TOLERANCE':
                     opts.quality.tolerance = float(words[1])
                 elif key == 'CHECKFREQ':
@@ -1773,61 +1653,60 @@ class InpFile(object):
                     if len(words) == 2:
                         edata['key'] = words[0]
                         setattr(opts, words[0].lower(), float(words[1]))
-                        logger.warn('%(fname)s:%(lnum)-6d %(sec)13s option "%(key)s" is undocumented; adding, but please verify syntax', edata)
+                        logger.warn('%(lnum)-6d %(sec)13s option "%(key)s" is undocumented; adding, but please verify syntax', edata)
                     elif len(words) == 3:
                         edata['key'] = words[0] + ' ' + words[1]
                         setattr(opts, words[0].lower() + '_' + words[1].lower(), float(words[2]))
-                        logger.warn('%(fname)s:%(lnum)-6d %(sec)13s option "%(key)s" is undocumented; adding, but please verify syntax', edata)
-        if (type(opts.time.report_timestep) == float or
-                type(opts.time.report_timestep) == int):
+                        logger.warn('%(lnum)-6d %(sec)13s option "%(key)s" is undocumented; adding, but please verify syntax', edata)
+        if isinstance(opts.time.report_timestep, (float, int)):
             if opts.time.report_timestep < opts.time.hydraulic_timestep:
-                raise RuntimeError('opts.report_timestep must be greater than or equal to opts.hydraulic_timestep.')
+                raise ENValueError(202, 'report timestep less than hydraulic timestep')
             if opts.time.report_timestep % opts.time.hydraulic_timestep != 0:
-                raise RuntimeError('opts.report_timestep must be a multiple of opts.hydraulic_timestep')
+                raise ENValueError(202, 'report timestep must be integer multiple of hydraulic timestep')
 
     def _write_options(self, f, wn, version=2.2):
-        f.write('[OPTIONS]\n'.encode('ascii'))
+        f.write('[OPTIONS]\n'.encode(sys_default_enc))
         entry_string = '{:20s} {:20s}\n'
         entry_float = '{:20s} {:.11g}\n'
-        f.write(entry_string.format('UNITS', self.flow_units.name).encode('ascii'))
+        f.write(entry_string.format('UNITS', self.flow_units.name).encode(sys_default_enc))
 
-        f.write(entry_string.format('HEADLOSS', wn.options.hydraulic.headloss).encode('ascii'))
+        f.write(entry_string.format('HEADLOSS', wn.options.hydraulic.headloss).encode(sys_default_enc))
 
-        f.write(entry_float.format('SPECIFIC GRAVITY', wn.options.hydraulic.specific_gravity).encode('ascii'))
+        f.write(entry_float.format('SPECIFIC GRAVITY', wn.options.hydraulic.specific_gravity).encode(sys_default_enc))
 
-        f.write(entry_float.format('VISCOSITY', wn.options.hydraulic.viscosity).encode('ascii'))
+        f.write(entry_float.format('VISCOSITY', wn.options.hydraulic.viscosity).encode(sys_default_enc))
 
-        f.write(entry_float.format('TRIALS', wn.options.hydraulic.trials).encode('ascii'))
+        f.write(entry_float.format('TRIALS', wn.options.hydraulic.trials).encode(sys_default_enc))
 
-        f.write(entry_float.format('ACCURACY', wn.options.hydraulic.accuracy).encode('ascii'))
+        f.write(entry_float.format('ACCURACY', wn.options.hydraulic.accuracy).encode(sys_default_enc))
 
-        f.write(entry_float.format('CHECKFREQ', wn.options.hydraulic.checkfreq).encode('ascii'))
+        f.write(entry_float.format('CHECKFREQ', wn.options.hydraulic.checkfreq).encode(sys_default_enc))
 
-        f.write(entry_float.format('MAXCHECK', wn.options.hydraulic.maxcheck).encode('ascii'))
+        f.write(entry_float.format('MAXCHECK', wn.options.hydraulic.maxcheck).encode(sys_default_enc))
 
         # EPANET 2.2 OPTIONS
         if version == 2.0:
             pass
         else:
             if wn.options.hydraulic.headerror != 0: 
-                f.write(entry_float.format('HEADERROR', wn.options.hydraulic.headerror).encode('ascii'))
+                f.write(entry_float.format('HEADERROR', wn.options.hydraulic.headerror).encode(sys_default_enc))
 
             if wn.options.hydraulic.flowchange != 0:
-                f.write(entry_float.format('FLOWCHANGE', wn.options.hydraulic.flowchange).encode('ascii'))
+                f.write(entry_float.format('FLOWCHANGE', wn.options.hydraulic.flowchange).encode(sys_default_enc))
 
         # EPANET 2.x OPTIONS
         if wn.options.hydraulic.damplimit != 0:
-            f.write(entry_float.format('DAMPLIMIT', wn.options.hydraulic.damplimit).encode('ascii'))
+            f.write(entry_float.format('DAMPLIMIT', wn.options.hydraulic.damplimit).encode(sys_default_enc))
 
         if wn.options.hydraulic.unbalanced_value is None:
-            f.write(entry_string.format('UNBALANCED', wn.options.hydraulic.unbalanced).encode('ascii'))
+            f.write(entry_string.format('UNBALANCED', wn.options.hydraulic.unbalanced).encode(sys_default_enc))
         else:
-            f.write('{:20s} {:s} {:d}\n'.format('UNBALANCED', wn.options.hydraulic.unbalanced, wn.options.hydraulic.unbalanced_value).encode('ascii'))
+            f.write('{:20s} {:s} {:d}\n'.format('UNBALANCED', wn.options.hydraulic.unbalanced, wn.options.hydraulic.unbalanced_value).encode(sys_default_enc))
 
         if wn.options.hydraulic.pattern is not None:
-            f.write(entry_string.format('PATTERN', wn.options.hydraulic.pattern).encode('ascii'))
+            f.write(entry_string.format('PATTERN', wn.options.hydraulic.pattern).encode(sys_default_enc))
 
-        f.write(entry_float.format('DEMAND MULTIPLIER', wn.options.hydraulic.demand_multiplier).encode('ascii'))
+        f.write(entry_float.format('DEMAND MULTIPLIER', wn.options.hydraulic.demand_multiplier).encode(sys_default_enc))
 
         # EPANET 2.2 OPTIONS
         if version == 2.0:
@@ -1835,36 +1714,43 @@ class InpFile(object):
                 logger.critical('You have specified a PDD analysis using EPANET 2.0. This is not supported in EPANET 2.0. The analysis will default to DD mode.')
         else:
             if wn.options.hydraulic.demand_model in ['PDA', 'PDD']: 
-                f.write('{:20s} {}\n'.format('DEMAND MODEL', wn.options.hydraulic.demand_model).encode('ascii'))
+                f.write('{:20s} {}\n'.format('DEMAND MODEL', wn.options.hydraulic.demand_model).encode(sys_default_enc))
 
                 minimum_pressure = from_si(self.flow_units, wn.options.hydraulic.minimum_pressure, HydParam.Pressure)
-                f.write('{:20s} {:.2f}\n'.format('MINIMUM PRESSURE', minimum_pressure).encode('ascii'))
+                f.write('{:20s} {:.2f}\n'.format('MINIMUM PRESSURE', minimum_pressure).encode(sys_default_enc))
 
                 required_pressure = from_si(self.flow_units, wn.options.hydraulic.required_pressure, HydParam.Pressure)
-                f.write('{:20s} {:.2f}\n'.format('REQUIRED PRESSURE', required_pressure).encode('ascii'))
-
-                f.write('{:20s} {}\n'.format('PRESSURE EXPONENT', wn.options.hydraulic.pressure_exponent).encode('ascii'))
-
+                if required_pressure >= 0.1: # EPANET lower limit on required pressure = 0.1 (in psi or m)
+                    f.write('{:20s} {:.2f}\n'.format('REQUIRED PRESSURE', required_pressure).encode(sys_default_enc))
+                else:
+                    warnings.warn('REQUIRED PRESSURE is below the lower limit for EPANET (0.1 in psi or m). The value has been set to 0.1 in the INP file.')
+                    logger.warning('REQUIRED PRESSURE is below the lower limit for EPANET (0.1 in psi or m). The value has been set to 0.1 in the INP file.')
+                    f.write('{:20s} {:.2f}\n'.format('REQUIRED PRESSURE', 0.1).encode(sys_default_enc))
+                f.write('{:20s} {}\n'.format('PRESSURE EXPONENT', wn.options.hydraulic.pressure_exponent).encode(sys_default_enc))
+        
+        if wn.options.hydraulic.inpfile_pressure_units is not None:
+            f.write(entry_string.format('PRESSURE', wn.options.hydraulic.inpfile_pressure_units).encode(sys_default_enc))
+            
         # EPANET 2.0+ OPTIONS
-        f.write(entry_float.format('EMITTER EXPONENT',  wn.options.hydraulic.emitter_exponent).encode('ascii'))
+        f.write(entry_float.format('EMITTER EXPONENT',  wn.options.hydraulic.emitter_exponent).encode(sys_default_enc))
 
         if wn.options.quality.parameter.upper() in ['NONE', 'AGE']:
-            f.write(entry_string.format('QUALITY', wn.options.quality.parameter).encode('ascii'))
+            f.write(entry_string.format('QUALITY', wn.options.quality.parameter).encode(sys_default_enc))
         elif wn.options.quality.parameter.upper() in ['TRACE']:
-            f.write('{:20s} {} {}\n'.format('QUALITY', wn.options.quality.parameter, wn.options.quality.trace_node).encode('ascii'))
+            f.write('{:20s} {} {}\n'.format('QUALITY', wn.options.quality.parameter, wn.options.quality.trace_node).encode(sys_default_enc))
         else:
-            f.write('{:20s} {} {}\n'.format('QUALITY', wn.options.quality.chemical_name, wn.options.quality.inpfile_units).encode('ascii'))
+            f.write('{:20s} {} {}\n'.format('QUALITY', wn.options.quality.chemical_name, wn.options.quality.inpfile_units).encode(sys_default_enc))
 
-        f.write(entry_float.format('DIFFUSIVITY', wn.options.quality.diffusivity).encode('ascii'))
+        f.write(entry_float.format('DIFFUSIVITY', wn.options.quality.diffusivity).encode(sys_default_enc))
 
-        f.write(entry_float.format('TOLERANCE', wn.options.quality.tolerance).encode('ascii'))
+        f.write(entry_float.format('TOLERANCE', wn.options.quality.tolerance).encode(sys_default_enc))
 
         if wn.options.hydraulic.hydraulics is not None:
-            f.write('{:20s} {:s} {:<30s}\n'.format('HYDRAULICS', wn.options.hydraulic.hydraulics, wn.options.hydraulic.hydraulics_filename).encode('ascii'))
+            f.write('{:20s} {:s} {:<30s}\n'.format('HYDRAULICS', wn.options.hydraulic.hydraulics, wn.options.hydraulic.hydraulics_filename).encode(sys_default_enc))
 
         if wn.options.graphics.map_filename is not None:
-            f.write(entry_string.format('MAP', wn.options.graphics.map_filename).encode('ascii'))
-        f.write('\n'.encode('ascii'))
+            f.write(entry_string.format('MAP', wn.options.graphics.map_filename).encode(sys_default_enc))
+        f.write('\n'.encode(sys_default_enc))
 
     def _read_times(self):
         opts = self.wn.options
@@ -1896,46 +1782,45 @@ class InpFile(object):
                 setattr(opts.time, key_string.lower(), int(float(current[2]) * 3600) if _is_number(current[2]) else int(_str_time_to_sec(current[2])))
 
     def _write_times(self, f, wn):
-        f.write('[TIMES]\n'.encode('ascii'))
+        f.write('[TIMES]\n'.encode(sys_default_enc))
         entry = '{:20s} {:10s}\n'
         time_entry = '{:20s} {:02d}:{:02d}:{:02d}\n'
         time = wn.options.time
 
-        hrs, mm, sec = time.seconds_to_tuple(time.duration)
-        f.write(time_entry.format('DURATION', hrs, mm, sec).encode('ascii'))
+        hrs, mm, sec = _sec_to_string(time.duration)
+        f.write(time_entry.format('DURATION', hrs, mm, sec).encode(sys_default_enc))
 
-        hrs, mm, sec = time.seconds_to_tuple(time.hydraulic_timestep)
-        f.write(time_entry.format('HYDRAULIC TIMESTEP', hrs, mm, sec).encode('ascii'))
+        hrs, mm, sec = _sec_to_string(time.hydraulic_timestep)
+        f.write(time_entry.format('HYDRAULIC TIMESTEP', hrs, mm, sec).encode(sys_default_enc))
 
-        hrs, mm, sec = time.seconds_to_tuple(time.quality_timestep)
-        f.write(time_entry.format('QUALITY TIMESTEP', hrs, mm, sec).encode('ascii'))
+        hrs, mm, sec = _sec_to_string(time.quality_timestep)
+        f.write(time_entry.format('QUALITY TIMESTEP', hrs, mm, sec).encode(sys_default_enc))
 
-        hrs, mm, sec = time.seconds_to_tuple(time.pattern_timestep)
-        f.write(time_entry.format('PATTERN TIMESTEP', hrs, mm, sec).encode('ascii'))
+        hrs, mm, sec = _sec_to_string(time.pattern_timestep)
+        f.write(time_entry.format('PATTERN TIMESTEP', hrs, mm, sec).encode(sys_default_enc))
 
-        hrs, mm, sec = time.seconds_to_tuple(time.pattern_start)
-        f.write(time_entry.format('PATTERN START', hrs, mm, sec).encode('ascii'))
+        hrs, mm, sec = _sec_to_string(time.pattern_start)
+        f.write(time_entry.format('PATTERN START', hrs, mm, sec).encode(sys_default_enc))
 
-        hrs, mm, sec = time.seconds_to_tuple(time.report_timestep)
-        f.write(time_entry.format('REPORT TIMESTEP', hrs, mm, sec).encode('ascii'))
+        hrs, mm, sec = _sec_to_string(time.report_timestep)
+        f.write(time_entry.format('REPORT TIMESTEP', hrs, mm, sec).encode(sys_default_enc))
 
-        hrs, mm, sec = time.seconds_to_tuple(time.report_start)
-        f.write(time_entry.format('REPORT START', hrs, mm, sec).encode('ascii'))
+        hrs, mm, sec = _sec_to_string(time.report_start)
+        f.write(time_entry.format('REPORT START', hrs, mm, sec).encode(sys_default_enc))
 
-        hrs, mm, sec = time.seconds_to_tuple(time.start_clocktime)
+        hrs, mm, sec = _sec_to_string(time.start_clocktime)
         if hrs < 12:
             time_format = ' AM'
         else:
             hrs -= 12
             time_format = ' PM'
-        f.write('{:20s} {:02d}:{:02d}:{:02d}{:s}\n'.format('START CLOCKTIME', hrs, mm, sec, time_format).encode('ascii'))
+        f.write('{:20s} {:02d}:{:02d}:{:02d}{:s}\n'.format('START CLOCKTIME', hrs, mm, sec, time_format).encode(sys_default_enc))
 
-        hrs, mm, sec = time.seconds_to_tuple(time.rule_timestep)
+        hrs, mm, sec = _sec_to_string(time.rule_timestep)
 
-        ### TODO: RULE TIMESTEP is not written?!
-        f.write(time_entry.format('RULE TIMESTEP', hrs, mm, int(sec)).encode('ascii'))
-        f.write(entry.format('STATISTIC', wn.options.time.statistic).encode('ascii'))
-        f.write('\n'.encode('ascii'))
+        f.write(time_entry.format('RULE TIMESTEP', hrs, mm, int(sec)).encode(sys_default_enc))
+        f.write(entry.format('STATISTIC', wn.options.time.statistic).encode(sys_default_enc))
+        f.write('\n'.encode(sys_default_enc))
 
     def _read_report(self):
         for lnum, line in self.sections['[REPORT]']:
@@ -1986,59 +1871,59 @@ class InpFile(object):
                     logger.warning('Unknown report parameter: %s', current[0])
                     continue
                 elif current[1].upper() in ['YES']:
-                    self.wn.options.report.report_params[current[0].lower()][1] = True
+                    self.wn.options.report.report_params[current[0].lower()] = True
                 elif current[1].upper() in ['NO']:
-                    self.wn.options.report.report_params[current[0].lower()][1] = False
+                    self.wn.options.report.report_params[current[0].lower()] = False
                 else:
                     self.wn.options.report.param_opts[current[0].lower()][current[1].upper()] = float(current[2])
 
     def _write_report(self, f, wn):
-        f.write('[REPORT]\n'.encode('ascii'))
+        f.write('[REPORT]\n'.encode(sys_default_enc))
         report = wn.options.report
         if report.status.upper() != 'NO':
-            f.write('STATUS     {}\n'.format(report.status).encode('ascii'))
+            f.write('STATUS     {}\n'.format(report.status).encode(sys_default_enc))
         if report.summary.upper() != 'YES':
-            f.write('SUMMARY    {}\n'.format(report.summary).encode('ascii'))
+            f.write('SUMMARY    {}\n'.format(report.summary).encode(sys_default_enc))
         if report.pagesize is not None:
-            f.write('PAGE       {}\n'.format(report.pagesize).encode('ascii'))
+            f.write('PAGE       {}\n'.format(report.pagesize).encode(sys_default_enc))
         if report.report_filename is not None:
-            f.write('FILE       {}\n'.format(report.report_filename).encode('ascii'))
+            f.write('FILE       {}\n'.format(report.report_filename).encode(sys_default_enc))
         if report.energy.upper() != 'NO':
-            f.write('ENERGY     {}\n'.format(report.status).encode('ascii'))
+            f.write('ENERGY     {}\n'.format(report.status).encode(sys_default_enc))
         if report.nodes is True:
-            f.write('NODES      ALL\n'.encode('ascii'))
+            f.write('NODES      ALL\n'.encode(sys_default_enc))
         elif isinstance(report.nodes, str):
-            f.write('NODES      {}\n'.format(report.nodes).encode('ascii'))
+            f.write('NODES      {}\n'.format(report.nodes).encode(sys_default_enc))
         elif isinstance(report.nodes, list):
             for ct, node in enumerate(report.nodes):
                 if ct == 0:
-                    f.write('NODES      {}'.format(node).encode('ascii'))
+                    f.write('NODES      {}'.format(node).encode(sys_default_enc))
                 elif ct % 10 == 0:
-                    f.write('\nNODES      {}'.format(node).encode('ascii'))
+                    f.write('\nNODES      {}'.format(node).encode(sys_default_enc))
                 else:
-                    f.write(' {}'.format(node).encode('ascii'))
-            f.write('\n'.encode('ascii'))
+                    f.write(' {}'.format(node).encode(sys_default_enc))
+            f.write('\n'.encode(sys_default_enc))
         if report.links is True:
-            f.write('LINKS      ALL\n'.encode('ascii'))
+            f.write('LINKS      ALL\n'.encode(sys_default_enc))
         elif isinstance(report.links, str):
-            f.write('LINKS      {}\n'.format(report.links).encode('ascii'))
+            f.write('LINKS      {}\n'.format(report.links).encode(sys_default_enc))
         elif isinstance(report.links, list):
             for ct, link in enumerate(report.links):
                 if ct == 0:
-                    f.write('LINKS      {}'.format(link).encode('ascii'))
+                    f.write('LINKS      {}'.format(link).encode(sys_default_enc))
                 elif ct % 10 == 0:
-                    f.write('\nLINKS      {}'.format(link).encode('ascii'))
+                    f.write('\nLINKS      {}'.format(link).encode(sys_default_enc))
                 else:
-                    f.write(' {}'.format(link).encode('ascii'))
-            f.write('\n'.encode('ascii'))
+                    f.write(' {}'.format(link).encode(sys_default_enc))
+            f.write('\n'.encode(sys_default_enc))
         # FIXME: defaults no longer located here
 #        for key, item in report.report_params.items():
 #            if item[1] != item[0]:
-#                f.write('{:10s} {}\n'.format(key.upper(), item[1]).encode('ascii'))
+#                f.write('{:10s} {}\n'.format(key.upper(), item[1]).encode(sys_default_enc))
         for key, item in report.param_opts.items():
             for opt, val in item.items():
-                f.write('{:10s} {:10s} {}\n'.format(key.upper(), opt.upper(), val).encode('ascii'))
-        f.write('\n'.encode('ascii'))
+                f.write('{:10s} {:10s} {}\n'.format(key.upper(), opt.upper(), val).encode(sys_default_enc))
+        f.write('\n'.encode(sys_default_enc))
 
     ### Network Map/Tags
 
@@ -2053,14 +1938,14 @@ class InpFile(object):
             node.coordinates = (float(current[1]), float(current[2]))
 
     def _write_coordinates(self, f, wn):
-        f.write('[COORDINATES]\n'.encode('ascii'))
+        f.write('[COORDINATES]\n'.encode(sys_default_enc))
         entry = '{:10s} {:20.9f} {:20.9f}\n'
         label = '{:10s} {:10s} {:10s}\n'
-        f.write(label.format(';Node', 'X-Coord', 'Y-Coord').encode('ascii'))
+        f.write(label.format(';Node', 'X-Coord', 'Y-Coord').encode(sys_default_enc))
         for name, node in wn.nodes():
             val = node.coordinates
-            f.write(entry.format(name, val[0], val[1]).encode('ascii'))
-        f.write('\n'.encode('ascii'))
+            f.write(entry.format(name, val[0], val[1]).encode(sys_default_enc))
+        f.write('\n'.encode(sys_default_enc))
 
     def _read_vertices(self):
         for lnum, line in self.sections['[VERTICES]']:
@@ -2076,17 +1961,15 @@ class InpFile(object):
             link._vertices.append((float(current[1]), float(current[2])))
 
     def _write_vertices(self, f, wn):
-        f.write('[VERTICES]\n'.encode('ascii'))
+        f.write('[VERTICES]\n'.encode(sys_default_enc))
         entry = '{:10s} {:20.9f} {:20.9f}\n'
         label = '{:10s} {:10s} {:10s}\n'
-        f.write(label.format(';Link', 'X-Coord', 'Y-Coord').encode('ascii'))
-        lnames = list(wn.pipe_name_list)
-        # lnames.sort()
-        for pipe_name in lnames:
-            pipe = wn.links[pipe_name]
-            for vert in pipe._vertices:
-                f.write(entry.format(pipe_name, vert[0], vert[1]).encode('ascii'))
-        f.write('\n'.encode('ascii'))
+        f.write(label.format(';Link', 'X-Coord', 'Y-Coord').encode(sys_default_enc))
+        for name, link in wn.links():
+                for vert in link._vertices:
+                    f.write(entry.format(name, vert[0], vert[1]).encode(sys_default_enc))
+        
+        f.write('\n'.encode(sys_default_enc))
 
     def _read_labels(self):
         labels = []
@@ -2099,11 +1982,11 @@ class InpFile(object):
         self.wn._labels = labels
 
     def _write_labels(self, f, wn):
-        f.write('[LABELS]\n'.encode('ascii'))
+        f.write('[LABELS]\n'.encode(sys_default_enc))
         if wn._labels is not None:
             for label in wn._labels:
-                f.write(' {}\n'.format(label).encode('ascii'))
-        f.write('\n'.encode('ascii'))
+                f.write(' {}\n'.format(label).encode(sys_default_enc))
+        f.write('\n'.encode(sys_default_enc))
 
     def _read_backdrop(self):
         for lnum, line in self.sections['[BACKDROP]']:
@@ -2123,19 +2006,19 @@ class InpFile(object):
 
     def _write_backdrop(self, f, wn):
         if wn.options.graphics is not None:
-            f.write('[BACKDROP]\n'.encode('ascii'))
+            f.write('[BACKDROP]\n'.encode(sys_default_enc))
             if wn.options.graphics.dimensions is not None:
                 f.write('DIMENSIONS    {0}    {1}    {2}    {3}\n'.format(wn.options.graphics.dimensions[0],
                                                                         wn.options.graphics.dimensions[1],
                                                                         wn.options.graphics.dimensions[2],
-                                                                        wn.options.graphics.dimensions[3]).encode('ascii'))
+                                                                        wn.options.graphics.dimensions[3]).encode(sys_default_enc))
             if wn.options.graphics.units is not None:
-                f.write('UNITS    {0}\n'.format(wn.options.graphics.units).encode('ascii'))
+                f.write('UNITS    {0}\n'.format(wn.options.graphics.units).encode(sys_default_enc))
             if wn.options.graphics.image_filename is not None:
-                f.write('FILE    {0}\n'.format(wn.options.graphics.image_filename).encode('ascii'))
+                f.write('FILE    {0}\n'.format(wn.options.graphics.image_filename).encode(sys_default_enc))
             if wn.options.graphics.offset is not None:
-                f.write('OFFSET    {0}    {1}\n'.format(wn.options.graphics.offset[0], wn.options.graphics.offset[1]).encode('ascii'))
-            f.write('\n'.encode('ascii'))
+                f.write('OFFSET    {0}    {1}\n'.format(wn.options.graphics.offset[0], wn.options.graphics.offset[1]).encode(sys_default_enc))
+            f.write('\n'.encode(sys_default_enc))
 
     def _read_tags(self):
         for lnum, line in self.sections['[TAGS]']: 
@@ -2153,23 +2036,23 @@ class InpFile(object):
                 continue
 
     def _write_tags(self, f, wn):
-        f.write('[TAGS]\n'.encode('ascii'))
+        f.write('[TAGS]\n'.encode(sys_default_enc))
         entry = '{:10s} {:10s} {:10s}\n'
         label = '{:10s} {:10s} {:10s}\n'
-        f.write(label.format(';type', 'name', 'tag').encode('ascii'))
+        f.write(label.format(';type', 'name', 'tag').encode(sys_default_enc))
         nnodes = list(wn.node_name_list)
         # nnodes.sort()
         for node_name in nnodes:
             node = wn.nodes[node_name]
             if node.tag:
-                f.write(entry.format('NODE', node_name, node.tag).encode('ascii'))
+                f.write(entry.format('NODE', node_name, node.tag).encode(sys_default_enc))
         nlinks = list(wn.link_name_list)
         nlinks.sort()
         for link_name in nlinks:
             link = wn.links[link_name]
             if link.tag:
-                f.write(entry.format('LINK', link_name, link.tag).encode('ascii'))
-        f.write('\n'.encode('ascii'))
+                f.write(entry.format('LINK', link_name, link.tag).encode(sys_default_enc))
+        f.write('\n'.encode(sys_default_enc))
 
     ### End of File
 
@@ -2194,7 +2077,7 @@ class InpFile(object):
                 create_curve(name)
 
     def _write_end(self, f, wn):
-        f.write('[END]\n'.encode('ascii'))
+        f.write('[END]\n'.encode(sys_default_enc))
 
 
 class _EpanetRule(object):
@@ -2207,6 +2090,76 @@ class _EpanetRule(object):
         self._then_clauses = []
         self._else_clauses = []
         self.priority = 0
+
+    @classmethod
+    def parse_rules_lines(cls, lines, flow_units=FlowUnits.SI, mass_units=MassUnits.mg) -> list:
+        rules = list()
+        rule = None
+        in_if = False
+        in_then = False
+        in_else = False
+        new_lines = list()
+        new_line = list()
+        for line in lines:
+            if isinstance(line, (tuple, list)):
+                line = line[1]
+            line = line.split(';')[0]
+            words = line.strip().split()
+            for word in words:
+                if word.upper() in ['RULE', 'IF', 'THEN', 'ELSE', 'AND', 'OR', 'PRIORITY']:
+                    if len(new_line) > 0:
+                        text = ' '.join(new_line)
+                        new_lines.append(text)
+                        new_line = list()
+                new_line.append(word)
+        if len(new_line) > 0:
+            text = ' '.join(new_line)
+            new_lines.append(text)
+
+        for line in new_lines:
+            words = line.split()
+            if words == []:
+                continue
+            if len(words) == 0:
+                continue
+            if words[0].upper() == 'RULE':
+                if rule is not None:
+                    rules.append(rule)
+                rule = _EpanetRule(words[1], flow_units, mass_units)
+                in_if = False
+                in_then = False
+                in_else = False
+            elif words[0].upper() == 'IF':
+                in_if = True
+                in_then = False
+                in_else = False
+                rule.add_if(line)
+            elif words[0].upper() == 'THEN':
+                in_if = False
+                in_then = True
+                in_else = False
+                rule.add_then(line)
+            elif words[0].upper() == 'ELSE':
+                in_if = False
+                in_then = False
+                in_else = True
+                rule.add_else(line)
+            elif words[0].upper() == 'PRIORITY':
+                in_if = False
+                in_then = False
+                in_else = False
+                rule.set_priority(words[1])
+            elif in_if:
+                rule.add_if(line)
+            elif in_then:
+                rule.add_then(line)
+            elif in_else:
+                rule.add_else(line)
+            else:
+                continue
+        if rule is not None:
+            rules.append(rule)
+        return rules
 
     def from_if_then_else(self, control):
         """Create a rule from a Rule object"""
@@ -2375,14 +2328,14 @@ class _EpanetRule(object):
     def __str__(self):
         if self.priority >= 0:
             if len(self._else_clauses) > 0:
-                return 'RULE {}\n{}\n{}\n{}\nPRIORITY {}\n; end of rule\n'.format(self.ruleID, '\n'.join(self._if_clauses), '\n'.join(self._then_clauses), '\n'.join(self._else_clauses), self.priority)
+                return 'RULE {}\n{}\n{}\n{}\n PRIORITY {}\n ; end of rule\n'.format(self.ruleID, '\n'.join(self._if_clauses), '\n'.join(self._then_clauses), '\n'.join(self._else_clauses), self.priority)
             else:
-                return 'RULE {}\n{}\n{}\nPRIORITY {}\n; end of rule\n'.format(self.ruleID, '\n'.join(self._if_clauses), '\n'.join(self._then_clauses), self.priority)
+                return 'RULE {}\n{}\n{}\n PRIORITY {}\n ; end of rule\n'.format(self.ruleID, '\n'.join(self._if_clauses), '\n'.join(self._then_clauses), self.priority)
         else:
             if len(self._else_clauses) > 0:
-                return 'RULE {}\n{}\n{}\n{}\n; end of rule\n'.format(self.ruleID, '\n'.join(self._if_clauses), '\n'.join(self._then_clauses), '\n'.join(self._else_clauses))
+                return 'RULE {}\n{}\n{}\n{}\n ; end of rule\n'.format(self.ruleID, '\n'.join(self._if_clauses), '\n'.join(self._then_clauses), '\n'.join(self._else_clauses))
             else:
-                return 'RULE {}\n{}\n{}\n; end of rule\n'.format(self.ruleID, '\n'.join(self._if_clauses), '\n'.join(self._then_clauses))
+                return 'RULE {}\n{}\n{}\n ; end of rule\n'.format(self.ruleID, '\n'.join(self._if_clauses), '\n'.join(self._then_clauses))
 
     def generate_control(self, model):
         condition_list = []
@@ -2497,34 +2450,33 @@ class _EpanetRule(object):
 
 
 class BinFile(object):
-    """
-    EPANET binary output file reader class.
+    """EPANET binary output file reader.
     
     This class provides read functionality for EPANET binary output files.
     
     Parameters
     ----------
-    results_type : list of :class:`~wntr.epanet.util.ResultType`, default=None
+    results_type : list of ResultType, optional
         This parameter is *only* active when using a subclass of the BinFile that implements
-	a custom reader or writer.
-        If ``None``, then all results will be saved (node quality, demand, link flow, etc.).
-        Otherwise, a list of result types can be passed to limit the memory used.
-    network : bool, default=False
-        Save a new WaterNetworkModel from the description in the output binary file. Certain
+        a custom reader or writer, by default None. If None, then all results will be saved (node quality, 
+        demand, link flow, etc.). Otherwise, a list of result types can be passed to limit the memory used.
+    network : bool, optional
+        Save a new WaterNetworkModel from the description in the output binary file, by default None. Certain
         elements may be missing, such as patterns and curves, if this is done.
-    energy : bool, default=False
-        Save the pump energy results.
-    statistics : bool, default=False
+    energy : bool, optional
+        Save the pump energy results, by default False.
+    statistics : bool, optional
         Save the statistics lines (different from the stats flag in the inp file) that are
-        automatically calculated regarding hydraulic conditions.
-    convert_status : bool, default=True
-        Convert the EPANET link status (8 values) to simpler WNTR status (3 values). By 
-        default, this is done, and the encoded-cause status values are converted simple state
+        automatically calculated regarding hydraulic conditions, by default False.
+    convert_status : bool, optional
+        Convert the EPANET link status (8 values) to simpler WNTR status (3 values), by default True. 
+        When this is done, the encoded-cause status values are converted simple stat
         values, instead.
 
+    
     Returns
-    ----------
-    :class:`~wntr.sim.results.SimulationResults`
+    -------
+    SimulationResults
         A WNTR results object will be created and added to the instance after read.
 
     """
@@ -2574,71 +2526,6 @@ class BinFile(object):
         s -= m*60
         s = int(s)
         return '{:02}:{:02}:{:02}'.format(h, m, s)
-    
-    def setup_ep_results(self, times, nodes, links, result_types=None):
-        """Set up the results object (or file, etc.) for save_ep_line() calls to use.
-
-        The basic implementation sets up a dictionary of pandas DataFrames with the keys
-        being member names of the ResultsType class. If the items parameter is left blank,
-        the function will use the items that were specified during object creation.
-        If this too was blank, then all results parameters will be saved.
-
-        """
-        if result_types is None:
-            result_types = self.items
-        for member in result_types:
-            if member.is_node:
-                self.results.node[member.name] = pd.DataFrame(index=times, columns=nodes)
-            elif member.is_link:
-                self.results.link[member.name] = pd.DataFrame(index=times, columns=links)
-            else:
-                pass
-        self.results.network_name = self.inp_file
-
-    def save_ep_line(self, period, result_type, values):
-        """
-        Save an extended period set of values.
-
-        Each report period contains all the hydraulics and quality values for
-        the nodes and links. Nodes and link values are provided in the same
-        order as the names are specified in the prolog.
-
-        The result types for node data are: :attr:`ResultType.demand`, :attr:`ResultType.head`,
-        :attr:`ResultType.pressure` and :attr:`ResultType.quality`.
-
-        The result types for link data are: :attr:`ResultType.linkquality`,
-        :attr:`ResultType.flowrate`, and :attr:`ResultType.velocity`.
-
-        Parameters
-        ----------
-        period : int
-            The report period
-        result_type : str
-            One of the type strings listed above
-        values : numpy.array
-            The values to save, in the node or link order specified earlier in the file
-
-        """
-        if result_type in [ResultType.quality, ResultType.linkquality]:
-            if self.quality_type is QualType.Chem:
-                values = QualParam.Concentration._to_si(self.flow_units, values, mass_units=self.mass_units)
-            elif self.quality_type is QualType.Age:
-                values = QualParam.WaterAge._to_si(self.flow_units, values)
-        elif result_type == ResultType.demand:
-            values = HydParam.Demand._to_si(self.flow_units, values)
-        elif result_type == ResultType.flowrate:
-            values = HydParam.Flow._to_si(self.flow_units, values)
-        elif result_type == ResultType.head:
-            values = HydParam.HydraulicHead._to_si(self.flow_units, values)
-        elif result_type == ResultType.pressure:
-            values = HydParam.Pressure._to_si(self.flow_units, values)
-        elif result_type == ResultType.velocity:
-            values = HydParam.Velocity._to_si(self.flow_units, values)
-        if result_type in self.items:
-            if result_type.is_node:
-                self.results.node[result_type.name].iloc[period] = values
-            else:
-                self.results.link[result_type.name].iloc[period] = values
 
     def save_network_desc_line(self, element, values):
         """Save network description meta-data and element characteristics.
@@ -2655,7 +2542,7 @@ class BinFile(object):
             The values that go with the information
 
         """
-        self.results.meta[element] = values
+        pass
 
     def save_energy_line(self, pump_idx, pump_name, values):
         """Save pump energy from the output file.
@@ -2692,7 +2579,7 @@ class BinFile(object):
         pass
 
 #    @run_lineprofile()
-    def read(self, filename, convergence_error=False, custom_handlers=False):
+    def read(self, filename, convergence_error=False, darcy_weisbach=False, convert=True):
         """Read a binary file and create a results object.
 
         Parameters
@@ -2704,27 +2591,16 @@ class BinFile(object):
             simulation does not converge. If convergence_error is False, partial results are returned, 
             a warning will be issued, and results.error_code will be set to 0
             if the simulation does not converge.  Default = False.
-        custom_handlers : bool, optional
-            If true, then the the custom, by-line handlers will be used. (:func:`~save_ep_line`, 
-            :func:`~setup_ep_results`, :func:`~finalize_save`, etc.) Otherwise read will use
-            a faster, all-at-once reader that reads all results.
 
         Returns
         -------
         object
-            returns a WaterNetworkResults object
-
-        .. note:: Overloading
-            This function should **not** be overloaded. Instead, overload the other functions
-            to change how it saves the results. Specifically, overload :func:`~setup_ep_results`,
-            :func:`~save_ep_line` and :func:`~finalize_save` to change how extended period
-            simulation results in a different format (such as directly to a file or database).
-            
+            returns a WaterNetworkResults object    
         """
         self.results = wntr.sim.SimulationResults()
         
         logger.debug('Read binary EPANET data from %s',filename)
-        dt_str = '|S{}'.format(self.idlen)
+        dt_str = 'u1'  #.format(self.idlen)
         with open(filename, 'rb') as fin:
             ftype = self.ftype
             idlen = self.idlen
@@ -2757,9 +2633,9 @@ class BinFile(object):
             np.fromfile(fin, dtype=np.uint8, count=240)
             inpfile = np.fromfile(fin, dtype=np.uint8, count=260)
             rptfile = np.fromfile(fin, dtype=np.uint8, count=260)
-            chemical = str(np.fromfile(fin, dtype=dt_str, count=1)[0])
+            chemical = bytes(np.fromfile(fin, dtype=dt_str, count=self.idlen)[:]).decode(sys_default_enc)
 #            wqunits = ''.join([chr(f) for f in np.fromfile(fin, dtype=np.uint8, count=idlen) if f!=0 ])
-            wqunits = str(np.fromfile(fin, dtype=dt_str, count=1)[0])
+            wqunits = bytes(np.fromfile(fin, dtype=dt_str, count=self.idlen)[:]).decode(sys_default_enc)
             mass = wqunits.split('/',1)[0]
             if mass in ['mg', 'ug', u'mg', u'ug']:
                 massunits = MassUnits[mass]
@@ -2783,10 +2659,10 @@ class BinFile(object):
             self.report_file = rptfile
             nodenames = []
             linknames = []
-            nodenames = np.array(np.fromfile(fin, dtype=dt_str, count=nnodes), dtype=str).tolist()
-            linknames = np.array(np.fromfile(fin, dtype=dt_str, count=nlinks), dtype=str).tolist()
-            self.node_names = nodenames
-            self.link_names = linknames
+            nodenames = [bytes(np.fromfile(fin, dtype=dt_str, count=self.idlen)).decode(sys_default_enc).replace('\x00','') for _ in range(nnodes)] 
+            linknames = [bytes(np.fromfile(fin, dtype=dt_str, count=self.idlen)).decode(sys_default_enc).replace('\x00','') for _ in range(nlinks)] 
+            self.node_names = np.array(nodenames)
+            self.link_names = np.array(linknames)
             linkstart = np.array(np.fromfile(fin, dtype=np.int32, count=nlinks), dtype=int)
             linkend = np.array(np.fromfile(fin, dtype=np.int32, count=nlinks), dtype=int)
             linktype = np.fromfile(fin, dtype=np.int32, count=nlinks)
@@ -2807,7 +2683,7 @@ class BinFile(object):
             """
             logger.debug('... read energy data ...')
             for i in range(npumps):
-                pidx = int(np.fromfile(fin,dtype=np.int32, count=1))
+                pidx = int(np.fromfile(fin,dtype=np.int32, count=1)[0]) #changed to reduce warning output, extracts first value and ensures int-- shouldn't change function
                 energy = np.fromfile(fin, dtype=np.dtype(ftype), count=6)
                 self.save_energy_line(pidx, linknames[pidx-1], energy)
             peakenergy = np.fromfile(fin, dtype=np.dtype(ftype), count=1)
@@ -2865,82 +2741,50 @@ class BinFile(object):
             self.save_network_desc_line('link_start', pd.Series(data=names[linkstart-1], index=linknames, copy=True))
             self.save_network_desc_line('link_end', pd.Series(data=names[linkend-1], index=linknames, copy=True))
             """
-            if custom_handlers is True:  
-                logger.debug('... set up results object ...')
-                self.setup_ep_results(reporttimes, nodenames, linknames)
-    
-                for ts in range(nrptsteps):
-                    try:
-                        demand = np.fromfile(fin, dtype=np.dtype(ftype), count=nnodes)
-                        head = np.fromfile(fin, dtype=np.dtype(ftype), count=nnodes)
-                        pressure = np.fromfile(fin, dtype=np.dtype(ftype), count=nnodes)
-                        quality = np.fromfile(fin, dtype=np.dtype(ftype), count=nnodes)
-                        flow = np.fromfile(fin, dtype=np.dtype(ftype), count=nlinks)
-                        velocity = np.fromfile(fin, dtype=np.dtype(ftype), count=nlinks)
-                        headloss = np.fromfile(fin, dtype=np.dtype(ftype), count=nlinks)
-                        linkquality = np.fromfile(fin, dtype=np.dtype(ftype), count=nlinks)
-                        linkstatus = np.fromfile(fin, dtype=np.dtype(ftype), count=nlinks)
-                        linksetting = np.fromfile(fin, dtype=np.dtype(ftype), count=nlinks)
-                        reactionrate = np.fromfile(fin, dtype=np.dtype(ftype), count=nlinks)
-                        frictionfactor = np.fromfile(fin, dtype=np.dtype(ftype), count=nlinks)
-                        self.save_ep_line(ts, ResultType.demand, demand)
-                        self.save_ep_line(ts, ResultType.head, head)
-                        self.save_ep_line(ts, ResultType.pressure, pressure)
-                        self.save_ep_line(ts, ResultType.quality, quality)
-                        self.save_ep_line(ts, ResultType.flowrate, flow)
-                        self.save_ep_line(ts, ResultType.velocity, velocity)
-                        self.save_ep_line(ts, ResultType.headloss, headloss)
-                        self.save_ep_line(ts, ResultType.linkquality, linkquality)
-                        self.save_ep_line(ts, ResultType.status, linkstatus)
-                        self.save_ep_line(ts, ResultType.setting, linksetting)
-                        self.save_ep_line(ts, ResultType.rxnrate, reactionrate)
-                        self.save_ep_line(ts, ResultType.frictionfact, frictionfactor)
-                    except Exception as e:
-                        logger.exception('Error reading or writing EP line: %s', e)
-                        logger.warning('Missing results from report period %d',ts)
-            else:
-#                type_list = 4*nnodes*['node'] + 8*nlinks*['link']
-                name_list = nodenames*4 + linknames*8
-                valuetype = nnodes*['demand']+nnodes*['head']+nnodes*['pressure']+nnodes*['quality'] + nlinks*['flow']+nlinks*['velocity']+nlinks*['headloss']+nlinks*['linkquality']+nlinks*['linkstatus']+nlinks*['linksetting']+nlinks*['reactionrate']+nlinks*['frictionfactor']
-                
-#                tuples = zip(type_list, valuetype, name_list)
-                tuples = list(zip(valuetype, name_list))
+            
+#           type_list = 4*nnodes*['node'] + 8*nlinks*['link']
+            name_list = nodenames*4 + linknames*8
+            valuetype = nnodes*['demand']+nnodes*['head']+nnodes*['pressure']+nnodes*['quality'] + nlinks*['flow']+nlinks*['velocity']+nlinks*['headloss']+nlinks*['linkquality']+nlinks*['linkstatus']+nlinks*['linksetting']+nlinks*['reactionrate']+nlinks*['frictionfactor']
+            
+#           tuples = zip(type_list, valuetype, name_list)
+            tuples = list(zip(valuetype, name_list))
 #                tuples = [(valuetype[i], v) for i, v in enumerate(name_list)]
-                index = pd.MultiIndex.from_tuples(tuples, names=['value','name'])      
+            index = pd.MultiIndex.from_tuples(tuples, names=['value','name'])      
+            
+            try:
+                data = np.fromfile(fin, dtype = np.dtype(ftype), count = (4*nnodes+8*nlinks)*nrptsteps)
+            except Exception as e:
+                logger.exception('Failed to process file: %s', e)
                 
-                try:
-                    data = np.fromfile(fin, dtype = np.dtype(ftype), count = (4*nnodes+8*nlinks)*nrptsteps)
-                except Exception as e:
-                    logger.exception('Failed to process file: %s', e)
-                    
-                N = int(np.floor(len(data)/(4*nnodes+8*nlinks)))
-                if N < nrptsteps:
-                    t = reporttimes[N]
-                    if convergence_error:
-                        logger.error('Simulation did not converge at time ' + self._get_time(t) + '.')
-                        raise RuntimeError('Simulation did not converge at time ' + self._get_time(t) + '.')
-                    else:
-                        data = data[0:N*(4*nnodes+8*nlinks)]
-                        data = np.reshape(data, (N, (4*nnodes+8*nlinks)))
-                        reporttimes = reporttimes[0:N]
-                        warnings.warn('Simulation did not converge at time ' + self._get_time(t) + '.')
-                        self.results.error_code = wntr.sim.results.ResultsStatus.error
+            N = int(np.floor(len(data)/(4*nnodes+8*nlinks)))
+            if N < nrptsteps:
+                t = reporttimes[N]
+                if convergence_error:
+                    logger.error('Simulation did not converge at time ' + self._get_time(t) + '.')
+                    raise RuntimeError('Simulation did not converge at time ' + self._get_time(t) + '.')
                 else:
-                    data = np.reshape(data, (nrptsteps, (4*nnodes+8*nlinks)))
-                    self.results.error_code = None
+                    data = data[0:N*(4*nnodes+8*nlinks)]
+                    data = np.reshape(data, (N, (4*nnodes+8*nlinks)))
+                    reporttimes = reporttimes[0:N]
+                    warnings.warn('Simulation did not converge at time ' + self._get_time(t) + '.')
+                    self.results.error_code = wntr.sim.results.ResultsStatus.error
+            else:
+                data = np.reshape(data, (nrptsteps, (4*nnodes+8*nlinks)))
+                self.results.error_code = None
 
-                df = pd.DataFrame(data.transpose(), index =index, columns = reporttimes)
-                df = df.transpose()
-                
-                self.results.node = {}
-                self.results.link = {}
-                self.results.network_name = self.inp_file
-                
+            df = pd.DataFrame(data.transpose(), index =index, columns = reporttimes)
+            df = df.transpose()
+            
+            self.results.node = {}
+            self.results.link = {}
+            self.results.network_name = self.inp_file
+            
+            if convert:
                 # Node Results
                 self.results.node['demand'] = HydParam.Demand._to_si(self.flow_units, df['demand'])
                 self.results.node['head'] = HydParam.HydraulicHead._to_si(self.flow_units, df['head'])
                 self.results.node['pressure'] = HydParam.Pressure._to_si(self.flow_units, df['pressure'])
-
+        
                 # Water Quality Results (node and link)
                 if self.quality_type is QualType.Chem:
                     self.results.node['quality'] = QualParam.Concentration._to_si(self.flow_units, df['quality'], mass_units=self.mass_units)
@@ -2951,30 +2795,66 @@ class BinFile(object):
                 else:
                     self.results.node['quality'] = df['quality']
                     self.results.link['quality'] = df['linkquality']
-
+        
                 # Link Results
                 self.results.link['flowrate'] = HydParam.Flow._to_si(self.flow_units, df['flow'])
-                self.results.link['headloss'] = df['headloss']  # Unit is per 1000
                 self.results.link['velocity'] = HydParam.Velocity._to_si(self.flow_units, df['velocity'])
                 
-#                self.results.link['status'] = df['linkstatus']
+                headloss = np.array(df['headloss'])
+                headloss[:, linktype < 2] = to_si(self.flow_units, headloss[:, linktype < 2], HydParam.HeadLoss) # Pipe or CV
+                headloss[:, linktype >= 2] = to_si(self.flow_units, headloss[:, linktype >= 2], HydParam.Length) # Pump or Valve
+                self.results.link["headloss"] = pd.DataFrame(data=headloss, columns=linknames, index=reporttimes)
+        
                 status = np.array(df['linkstatus'])
+                    
                 if self.convert_status:
-                    status[status <= 2] = 0
-                    status[status == 3] = 1
-                    status[status >= 5] = 1
-                    status[status == 4] = 2
+                    """
+                    EPANET status codes
+                    0 = closed (max head exceeded)
+                    1 = temporarily closed
+                    2 = closed
+                    3 = open
+                    4 = active (partially open)
+                    5 = open (max flow exceeded)
+                    6 = open (flow setting not met)
+                    7 = open (press setting not met)
+                    """
+                    # 0 = 0, treat closed (max head exceeded) pump as closed
+                    # 1 = 1, treat temporarily closed pipe as open
+                    status[status == 2] = 0 # 2 = 0, closed
+                    status[status == 3] = 1 # 3 = 1, open
+                    status[status == 4] = 2 # 4 = 2, active
+                    status[status >= 5] = 1 # 5,6,7 = 1, treat valve open under different conditions as open
+                    
                 self.results.link['status'] = pd.DataFrame(data=status, columns=linknames, index=reporttimes)
                 
-                settings = np.array(df['linksetting'])
-                settings[:, linktype == EN.PRV] = to_si(self.flow_units, settings[:, linktype == EN.PRV], HydParam.Pressure)
-                settings[:, linktype == EN.PSV] = to_si(self.flow_units, settings[:, linktype == EN.PSV], HydParam.Pressure)
-                settings[:, linktype == EN.PBV] = to_si(self.flow_units, settings[:, linktype == EN.PBV], HydParam.Pressure)
-                settings[:, linktype == EN.FCV] = to_si(self.flow_units, settings[:, linktype == EN.FCV], HydParam.Flow)
-                self.results.link['setting'] = pd.DataFrame(data=settings, columns=linknames, index=reporttimes)
+                setting = np.array(df['linksetting'])
+                # pump setting is relative speed (unitless)
+                setting[:, linktype == EN.PIPE] = to_si(self.flow_units, setting[:, linktype == EN.PIPE], HydParam.RoughnessCoeff, 
+                                                darcy_weisbach=darcy_weisbach)
+                setting[:, linktype == EN.PRV] = to_si(self.flow_units, setting[:, linktype == EN.PRV], HydParam.Pressure)
+                setting[:, linktype == EN.PSV] = to_si(self.flow_units, setting[:, linktype == EN.PSV], HydParam.Pressure)
+                setting[:, linktype == EN.PBV] = to_si(self.flow_units, setting[:, linktype == EN.PBV], HydParam.Pressure)
+                setting[:, linktype == EN.FCV] = to_si(self.flow_units, setting[:, linktype == EN.FCV], HydParam.Flow)
+                self.results.link['setting'] = pd.DataFrame(data=setting, columns=linknames, index=reporttimes)
+                
+                self.results.link['friction_factor'] = df['frictionfactor']
+                self.results.link['reaction_rate'] = QualParam.ReactionRate._to_si(self.flow_units, df['reactionrate'],self.mass_units) 
+            else:
+                self.results.node['demand'] = df['demand']
+                self.results.node['head'] = df['head']
+                self.results.node['pressure'] = df['pressure']
+                self.results.node['quality'] = df['quality']
+                
+                self.results.link['flowrate'] = df['flow']
+                self.results.link['headloss'] = df['headloss']
+                self.results.link['velocity'] = df['velocity']
+                self.results.link['quality'] = df['linkquality']
+                self.results.link['status'] = df['linkstatus']
+                self.results.link['setting'] = df['linksetting']
                 self.results.link['friction_factor'] = df['frictionfactor']
                 self.results.link['reaction_rate'] = df['reactionrate']
-                
+            
             logger.debug('... read epilog ...')
             # Read the averages and then the number of periods for checks
             averages = np.fromfile(fin, dtype=np.dtype(ftype), count=4)
@@ -3121,13 +3001,13 @@ def _compare_lines(line1, line2, tol=1e-14):  # pragma: no cover
 
     for i, a in enumerate(line1):
         b = line2[i]
-        if type(a) not in {int, float}:
+        if isinstance(a, (int, float)):
             if a != b:
                 return False
-        elif type(a) is int and type(b) is int:
+        elif isinstance(a, int) and isinstance(b, int):
             if a != b:
                 return False
-        elif type(a) in {int, float} and type(b) in {int, float}:
+        elif isinstance(a, (int, float)) and isinstance(b, (int, float)):
             if abs(a - b) > tol:
                 return False
         else:
@@ -3155,12 +3035,124 @@ def _clean_line(wn, sec, line):  # pragma: no cover
             other = wn.options.hydraulic.pattern
             if other is None:
                 other = 1
-            if (type(line[3]) is int) and (other is int):
+            if isinstance(line[3], int) and isinstance(other, int):
                 other = int(other)
             if line[3] == other:
                 return line[:3]
 
     return line
+
+
+def _read_control_line(line, wn, flow_units, control_name):
+    """
+    Parameters
+    ----------
+    line: str
+    wn: wntr.network.WaterNetworkModel
+    flow_units: str
+    control_name: str
+
+    Returns
+    -------
+    control_obj: Control
+	
+    """
+    line = line.split(';')[0]
+    current = line.split()
+    if current == []:
+        return
+    link_name = current[1]
+    link = wn.get_link(link_name)
+    if current[5].upper() != 'TIME' and current[5].upper() != 'CLOCKTIME':
+        node_name = current[5]
+    current = [i.upper() for i in current]
+    current[1] = link_name # don't capitalize the link name
+
+    # Create the control action object
+
+    status = current[2].upper()
+    if status == 'OPEN' or status == 'OPENED' or status == 'CLOSED' or status == 'ACTIVE':
+        setting = LinkStatus[status].value
+        action_obj = wntr.network.ControlAction(link, 'status', setting)
+    else:
+        if isinstance(link, wntr.network.Pump):
+            action_obj = wntr.network.ControlAction(link, 'base_speed', float(current[2]))
+        elif isinstance(link, wntr.network.Valve):
+            if link.valve_type == 'PRV' or link.valve_type == 'PSV' or link.valve_type == 'PBV':
+                setting = to_si(flow_units, float(current[2]), HydParam.Pressure)
+            elif link.valve_type == 'FCV':
+                setting = to_si(flow_units, float(current[2]), HydParam.Flow)
+            elif link.valve_type == 'TCV':
+                setting = float(current[2])
+            elif link.valve_type == 'GPV':
+                setting = current[2]
+            else:
+                raise ValueError('Unrecognized valve type {0} while parsing control {1}'.format(link.valve_type, line))
+            action_obj = wntr.network.ControlAction(link, 'setting', setting)
+        else:
+            raise RuntimeError(('Links of type {0} can only have controls that change\n'.format(type(link))+
+                                'the link status. Control: {0}'.format(line)))
+
+    # Create the control object
+    #control_count += 1
+    #control_name = 'control '+str(control_count)
+    if 'TIME' not in current and 'CLOCKTIME' not in current:
+        threshold = None
+        if 'IF' in current:
+            node = wn.get_node(node_name)
+            if current[6] == 'ABOVE':
+                oper = np.greater
+            elif current[6] == 'BELOW':
+                oper = np.less
+            else:
+                raise RuntimeError("The following control is not recognized: " + line)
+            # OKAY - we are adding in the elevation. This is A PROBLEM
+            # IN THE INP WRITER. Now that we know, we can fix it, but
+            # if this changes, it will affect multiple pieces, just an
+            # FYI.
+            if node.node_type == 'Junction':
+                threshold = to_si(flow_units,
+                                  float(current[7]), HydParam.Pressure)# + node.elevation
+                control_obj = Control._conditional_control(node, 'pressure', oper, threshold, action_obj, control_name)
+            elif node.node_type == 'Tank':
+                threshold = to_si(flow_units, 
+                                  float(current[7]), HydParam.HydraulicHead)# + node.elevation
+                control_obj = Control._conditional_control(node, 'level', oper, threshold, action_obj, control_name)
+        else:
+            raise RuntimeError("The following control is not recognized: " + line)
+#                control_name = ''
+#                for i in range(len(current)-1):
+#                    control_name = control_name + '/' + current[i]
+#                control_name = control_name + '/' + str(round(threshold, 2))
+    else:
+        if 'CLOCKTIME' not in current:  # at time
+            if 'TIME' not in current:
+                raise ValueError('Unrecognized line in inp file: {0}'.format(line))
+
+            if ':' in current[5]:
+                run_at_time = int(_str_time_to_sec(current[5]))
+            else:
+                run_at_time = int(float(current[5])*3600)
+            control_obj = Control._time_control(wn, run_at_time, 'SIM_TIME', False, action_obj, control_name)
+#                    control_name = ''
+#                    for i in range(len(current)-1):
+#                        control_name = control_name + '/' + current[i]
+#                    control_name = control_name + '/' + str(run_at_time)
+        else:  # at clocktime
+            if len(current) < 7:
+                if ':' in current[5]:
+                    run_at_time = int(_str_time_to_sec(current[5]))
+                else:
+                    run_at_time = int(float(current[5])*3600)
+            else:
+                run_at_time = int(_clock_time_to_sec(current[5], current[6]))
+            control_obj = Control._time_control(wn, run_at_time, 'CLOCK_TIME', True, action_obj, control_name)
+#                    control_name = ''
+#                    for i in range(len(current)-1):
+#                        control_name = control_name + '/' + current[i]
+#                    control_name = control_name + '/' + str(run_at_time)
+    return control_obj
+
 
 def _diff_inp_files(file1, file2=None, float_tol=1e-8, max_diff_lines_per_section=5, 
                     htmldiff_file='diff.html'):   # pragma: no cover
@@ -3285,3 +3277,4 @@ def _diff_inp_files(file1, file2=None, float_tol=1e-8, max_diff_lines_per_sectio
     g.close()
     
     return n
+

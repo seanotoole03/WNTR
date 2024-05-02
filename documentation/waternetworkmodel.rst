@@ -2,6 +2,17 @@
 
     \clearpage
 
+.. doctest::
+    :hide:
+	
+    >>> import numpy as np
+    >>> import pandas as pd
+    >>> try:
+    ...    import geopandas as gpd
+    ... except ModuleNotFoundError:
+    ...    gpd = None
+
+
 Water network model
 ======================================
 
@@ -37,6 +48,11 @@ The following example builds a water network model.
     ...    wn = wntr.network.model.WaterNetworkModel('../examples/networks/Net3.inp')
     ... except:
     ...    wn = wntr.network.model.WaterNetworkModel('examples/networks/Net3.inp')
+    >>> import matplotlib as mpl
+    >>> try:
+    ...     mpl.use('Agg')
+    ... except:
+    ...     pass
 
 .. note:: 
   Unless otherwise noted, examples in the WNTR documentation use Net3.inp to build the
@@ -131,11 +147,11 @@ The following shows how to add an additional demand to the junction 121.
 .. doctest::
 
     >>> print(junction.demand_timeseries_list)  # doctest: +SKIP
-    <Demands: [<TimeSeries: base=0.002626444876132, pattern='1', category='None'>]> 
+    <Demands: [<TimeSeries: base_value=0.002626444876132, pattern_name='1', category='None'>]> 
     
     >>> junction.add_demand(base=1.0, pattern_name='1')
     >>> print(junction.demand_timeseries_list)  # doctest: +SKIP
-    <Demands: [<TimeSeries: base=0.002626444876132, pattern='1', category='None'>, <TimeSeries: base=1.0, pattern='1', category='None'>]>
+    <Demands: [<TimeSeries: base_value=0.002626444876132, pattern_name='1', category='None'>, <TimeSeries: base_value=1.0, pattern_name='1', category='None'>]>
 
 To remove the demand, use the Python ``del`` as with an array element.
 
@@ -143,7 +159,7 @@ To remove the demand, use the Python ``del`` as with an array element.
 
     >>> del junction.demand_timeseries_list[1]
     >>> print(junction.demand_timeseries_list)
-    <Demands: [<TimeSeries: base=0.002626444876132, pattern='1', category='None'>]>
+    <Demands: [<TimeSeries: base_value=0.002626444876132, pattern_name='1', category='None'>]>
 
 
 Modify time series
@@ -185,12 +201,59 @@ Add custom element attributes
 
 New attributes can be added to model elements simply by defining a new attribute 
 name and value. These attributes can be used in custom analysis and graphics.
+While this is similar to using external datasets directly, there can be benefits 
+to adding custom attributes to model objects.
+
+The following example uses a dataset that defines pipe material as 
+polyvinyl chloride (PVC), cast iron, steel, or high-density polyethylene (HDPE). 
+The dataset is indexed by pipe name.  The first 10 lines of the dataset are shown below.
+
+.. doctest::
+    :hide:
+
+    >>> np.random.seed(6789)
+    >>> material = pd.Series()
+    >>> for name, pipe in wn.pipes():
+    ...     val = np.random.choice(['PVC', 'Cast iron', 'Steel', 'HDPE'], 1, [0.45, 0.2, 0.1, 0.25])[0]
+    ...     material[name] = val
 
 .. doctest::
 
-    >>> pipe = wn.get_link('122')
-    >>> pipe.material = 'PVC'
+    >>> print(material.head(10))
+    20         Steel
+    40     Cast iron
+    50          HDPE
+    60           PVC
+    101    Cast iron
+    103          PVC
+    105        Steel
+    107        Steel
+    109    Cast iron
+    111        Steel
+    dtype: object
 	
+The data can be used to create a custom `material` attribute for each pipe object.
+
+.. doctest::
+
+    >>> for name, pipe in wn.pipes():
+    ...     pipe.material = material[name]
+
+The custom attribute can be used in analysis in several ways. 
+For example, the following example closes the pipe if pipe material is 'Steel.'
+
+    >>> for name, pipe in wn.pipes():
+    ...     if pipe.material == 'Steel':
+    ...         pipe.initial_status = 'Closed'
+
+A complete list of custom attributes can also be obtained using a query, 
+as shown below.
+
+.. doctest::
+
+    >>> material = wn.query_link_attribute('material')
+
+    
 Iterate over elements
 -------------------------
 
@@ -252,24 +315,11 @@ Reset initial conditions
 
 When using the same water network model to run multiple simulations using the WNTRSimulator, initial conditions need to be reset between simulations.  
 Initial conditions include simulation time, tank head, reservoir head, pipe status, pump status, and valve status.
-When using the EpanetSimualtor, this step is not needed since EPANET starts at the initial conditions each time it is run.
+When using the EpanetSimulator, this step is not needed since EPANET starts at the initial conditions each time it is run.
 
 .. doctest::
 
     >>> wn.reset_initial_values()
-
-Write a model to an INP file
----------------------------------
-
-The water network model can be written to a file in EPANET INP format.
-
-By default, files are written in the LPS (liter per second) EPANET unit convention.
-The EPANET INP file will not include features not supported by EPANET (i.e., custom element attributes).
-EPANET INP files can be saved in EPANET 2.00.12 or 2.2.0 format.
-
-.. doctest::
-
-    >>> wn.write_inpfile('filename.inp', version=2.2)
 
 Build a model from scratch
 ---------------------------------
@@ -289,10 +339,10 @@ water network model.
     >>> wn.add_junction('node2', base_demand=0.02, demand_pattern='pat2', elevation=50, 
     ...     coordinates=(1,3))
     >>> wn.add_pipe('pipe1', 'node1', 'node2', length=304.8, diameter=0.3048, 
-    ...    roughness=100, minor_loss=0.0, status='OPEN')
+    ...    roughness=100, minor_loss=0.0, initial_status='OPEN')
     >>> wn.add_reservoir('res', base_head=125, head_pattern='pat1', coordinates=(0,2))
     >>> wn.add_pipe('pipe2', 'node1', 'res', length=100, diameter=0.3048, roughness=100, 
-    ...     minor_loss=0.0, status='OPEN')
+    ...     minor_loss=0.0, initial_status='OPEN')
     >>> ax = wntr.graphics.plot_network(wn)
 
 .. doctest::

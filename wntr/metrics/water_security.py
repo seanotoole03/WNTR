@@ -1,14 +1,5 @@
 """
 The wntr.metrics.water_security module contains water security metrics.
-
-.. rubric:: Contents
-
-.. autosummary::
-
-    mass_contaminant_consumed
-    volume_contaminant_consumed
-    extent_contaminant
-
 """
 import numpy as np
 import wntr.network
@@ -18,16 +9,16 @@ import logging
 logger = logging.getLogger(__name__)
 
 def mass_contaminant_consumed(demand, quality, detection_limit=0):
-    """ Mass of contaminant consumed [USEPA15]_.
+    """ Mass of contaminant consumed :cite:p:`usepa15`.
     
     Parameters
     ----------
     demand : pandas DataFrame
-        A pandas Dataframe containing demand 
+        A pandas DataFrame containing junction demand
         (index = times, columns = junction names).
     
     quality : pandas DataFrame
-        A pandas Dataframe containing water quality 
+        A pandas DataFrame containing junctions water quality
         (index = times, columns = junction names).
     
     detection_limit : float
@@ -46,16 +37,16 @@ def mass_contaminant_consumed(demand, quality, detection_limit=0):
     return MC
 
 def volume_contaminant_consumed(demand, quality, detection_limit=0):
-    """ Volume of contaminant consumed [USEPA15]_.
+    """ Volume of contaminant consumed :cite:p:`usepa15`.
     
     Parameters
     ----------
     demand : pandas DataFrame
-        A pandas Dataframe containing demand 
+        A pandas DataFrame containing junctions demand
         (index = times, columns = junction names).
     
     quality : pandas DataFrame
-        A pandas Dataframe containing water quality 
+        A pandas DataFrame containing junctions water quality
         (index = times, columns = junction names).
     
     detection_limit : float
@@ -75,16 +66,16 @@ def volume_contaminant_consumed(demand, quality, detection_limit=0):
 
 def extent_contaminant(quality, flowrate, wn, detection_limit=0):
     """ 
-    Extent of contaminant in the pipes [USEPA15]_.
+    Extent of contaminant in the pipes :cite:p:`usepa15`.
     
     Parameters
     ----------
     quality : pandas DataFrame
-        A pandas Dataframe containing water quality 
+        A pandas DataFrame containing node water quality
         (index = times, columns = node names).
     
     flowrate : pandas DataFrame
-        A pandas Dataframe containing flowrate 
+        A pandas DataFrame containing pipe flowrate
         (index = times, columns = pipe names).
         
     wn : wntr WaterNetworkModel
@@ -96,7 +87,7 @@ def extent_contaminant(quality, flowrate, wn, detection_limit=0):
     
     Returns
     -------
-    A pandas Series with extent of contaminantion (m)
+    A pandas Series with extent of contamination (m)
     """
     pipe_names = wn.pipe_name_list
     link_length = []

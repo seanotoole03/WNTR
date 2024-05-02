@@ -12,7 +12,7 @@ See :ref:`software_framework` for more information on features and limitations o
 
 EpanetSimulator
 -----------------
-The EpanetSimulator can be used to run EPANET 2.00.12 Programmer's Toolkit [Ross00]_ or EPANET 2.2.0 Programmer's Toolkit [RWTS20]_.  
+The EpanetSimulator can be used to run EPANET 2.00.12 Programmer's Toolkit :cite:p:`ross00` or EPANET 2.2.0 Programmer's Toolkit :cite:p:`rwts20`.  
 EPANET 2.2.0 is used by default and runs demand-driven and pressure dependent hydraulic analysis.  
 EPANET 2.00.12 runs demand-driven hydraulic analysis only.
 Both versions can also run water quality simulations, as described in :ref:`water_quality_simulation`.  
@@ -101,7 +101,7 @@ demand model,
 minimum pressure,
 required pressure, and 
 pressure exponent.
-Note that EPANET 2.0.12 does not use the demand model, minimum pressure, required pressure, or pressure exponent.
+Note that EPANET 2.00.12 does not use the demand model, minimum pressure, required pressure, or pressure exponent.
 Options that directly apply to hydraulic simulation that are not used in the
 WNTRSimulator are described in :ref:`limitations`.   
 
@@ -111,7 +111,7 @@ More information on water network options can be found in :ref:`options`.
 
 Mass balance at nodes
 -------------------------
-Both simulators use the mass balance equations from EPANET [Ross00]_:
+Both simulators use the mass balance equations from EPANET :cite:p:`ross00`:
 
 .. math::
 
@@ -127,7 +127,7 @@ If water is flowing out of node :math:`n` and into pipe :math:`p`, then
 
 Headloss in pipes
 -------------------------
-Both simulators use conservation of energy formulas from EPANET [Ross00]_. 
+Both simulators use conservation of energy formulas from EPANET :cite:p:`ross00`. 
 While the EpanetSimulator can use the Hazen-Williams and Chezy-Manning pipe head loss formulas, 
 the WNTRSimulator uses only the Hazen-Williams head loss formula, shown below.
 
@@ -225,7 +225,7 @@ The mass balance and headloss equations described above are solved by
 simultaneously determining demand along with the network pressures and flow rates.  
 
 Both simulators can run hydraulics using a pressure dependent demand simulation
-according to the following pressure-demand relationship [WaSM88]_:
+according to the following pressure-demand relationship :cite:p:`wasm88`:
 
 .. math::
 
@@ -266,11 +266,20 @@ in the following example.
     
     >>> wn.options.hydraulic.required_pressure = 21.097 # 30 psi = 21.097 m
     >>> wn.options.hydraulic.minimum_pressure  = 3.516 # 5 psi = 3.516 m
-    >>> wn.options.hydraulic.minimum_pressure = 0.55
-	
+    >>> wn.options.hydraulic.pressure_exponent = 0.55
+
+.. note:: 
+   The default values for required pressure, minimum pressure 
+   and pressure exponent are 0.07 m (0.1 psi), 0 m (0 psi), and 0.5, respectively. 
+   This matches EPANET specifications. 
+   If the user does not increase the default required pressure value, then a 
+   PDD simulation will be very similar to a DD simulation.  WNTR also enforces 
+   0.07 m (0.1 psi) as the lowest value for required pressure to match
+   EPANET specifications.
+   
 When using the WNTRSimulator, the required pressure, minimum pressure, and pressure exponent can vary throughout the network.  
-By default, each junction's required pressure, minimum pressure, and pressure exponent is set to None and the global value
-in the hydraulic options are used to define the PDD constraint for that junction. 
+By default, each junction's required pressure, minimum pressure, and pressure exponent is set to None and the global value is used 
+in the hydraulic options to define the PDD constraint for that junction. 
 If the user defines required pressure, minimum pressure, or pressure exponent on a junction, 
 those values will override the required pressure, minimum pressure, and pressure exponent defined in the global hydraulic options 
 when defining the PDD constraint for that junction.  
@@ -286,7 +295,7 @@ junction 121.
     
 The ability to use spatially variable required pressure, minimum pressure, and pressure 
 exponent is only available when using the WNTRSimulator.
-The EpanetSimulator always uses values in the global hydraulic options.
+The EpanetSimulator always uses the global values in the hydraulic options.
 
 .. _leak_model:
 
@@ -299,7 +308,7 @@ Users interested in using the EpanetSimulator to model leaks can still do so by 
 emitter coefficients. 
 
 When using the WNTRSimulator, leaks are modeled with a general form of the equation proposed by Crowl and Louvar
-[CrLo02]_ where the mass flow rate of fluid through the hole is expressed as:
+:cite:p:`crlo02` where the mass flow rate of fluid through the hole is expressed as:
 
 .. math::
 
@@ -319,9 +328,9 @@ where
 :math:`g` is the acceleration of gravity (m/s²), and 
 :math:`\rho` is the density of the fluid (kg/m³).
 
-The default discharge coefficient is 0.75 (assuming turbulent flow) [Lamb01]_, but 
+The default discharge coefficient is 0.75 (assuming turbulent flow) :cite:p:`lamb01`, but 
 the user can specify other values if needed.  
-The value of :math:`\alpha` is set to 0.5 (assuming large leaks out of steel pipes) [Lamb01]_ and currently cannot be changed by the user.
+The value of :math:`\alpha` is set to 0.5 (assuming large leaks out of steel pipes) :cite:p:`lamb01` and currently cannot be changed by the user.
 
 Leaks can be added to junctions and tanks.  
 A pipe break is modeled using a leak area large enough to drain the pipe.  
@@ -343,17 +352,19 @@ The following example adds a leak to the water network model.
 
     >>> node = wn.get_node('123')           
     >>> node.add_leak(wn, area=0.05, start_time=2*3600, end_time=12*3600)
-    
+
+.. _pause_restart:
+
 Pause and restart 
 ------------------
 
-The WNTRSimulator includes the ability to 
+The WNTRSimulator includes the ability to: 
 
 * Reset initial values and re-simulate using the same water network model.  Initial values include simulation time, tank head, reservoir head, pipe status, pump status, and valve status.
 
-* Pause a hydraulic simulation, change network operations, and then restart the simulation
+* Pause a hydraulic simulation, change network operations, and then restart the simulation.
 
-* Save the water network model and results to files and reload for future analysis
+* Save the water network model and results to files and reload for future analysis.
 
 These features are helpful when evaluating various response action plans or when 
 simulating long periods of time where the time resolution might vary.
@@ -416,77 +427,3 @@ values.
 Note that when using the EpanetSimulator, the model is reset each time it is used in 
 a simulation.
 
-
-Advanced: Customized models with WNTR's AML
--------------------------------------------
-
-WNTR has a custom algebraic modeling language (AML) that is used for
-WNTR's hydraulic model (used in the
-:class:`~wntr.sim.core.WNTRSimulator`). This AML is primarily used for
-efficient evaluation of constraint residuals and derivatives. WNTR's
-AML drastically simplifies the implementation, maintenance,
-modification, and customization of hydraulic models. The AML allows
-defining variables and constraints in a natural way. For example,
-suppose the user wants to solve the following system of nonlinear equations.
-
-.. math::
-
-   y - x^{2} = 0 \\
-   y - x - 1 = 0
-
-To create this model using WNTR's AML, the following can be used:
-   
-.. doctest::
-
-   >>> from wntr.sim import aml
-   
-   >>> m = aml.Model()
-   >>> m.x = aml.Var(1.0)
-   >>> m.y = aml.Var(1.0)
-   >>> m.c1 = aml.Constraint(m.y - m.x**2)
-   >>> m.c2 = aml.Constraint(m.y - m.x - 1)
-
-Before evaluating the constraint residuals or the Jacobian, :func:`~wntr.sim.aml.aml.Model.set_structure` must be called:
-
-.. doctest::
-
-   >>> m.set_structure()
-   >>> m.evaluate_residuals() # doctest: +SKIP
-   array([ 0., -1.])
-   >>> m.evaluate_jacobian()  # doctest: +SKIP
-   <2x2 sparse matrix of type '<class 'numpy.float64'>'
-	with 4 stored elements in Compressed Sparse Row format>
-   >>> m.evaluate_jacobian().toarray() # doctest: +SKIP
-   array([[-2.,  1.],
-       [-1.,  1.]])
-
-The methods :func:`~wntr.sim.aml.aml.Model.evaluate_residuals` and
-:func:`~wntr.sim.aml.aml.Model.evaluate_jacobian` return a NumPy array
-and a SciPy sparse CSR matrix, respectively. Variable values can also
-be loaded with a NumPy array. For example, a Newton
-step (without a line search) would look something like
-
-.. doctest::
-
-   >>> from scipy.sparse.linalg import spsolve
-   
-   >>> x = m.get_x()
-   >>> d = spsolve(m.evaluate_jacobian(), -m.evaluate_residuals())
-   >>> x += d
-   >>> m.load_var_values_from_x(x)
-   >>> m.evaluate_residuals() # doctest: +SKIP
-   array([-1., 0.])
-
-WNTR includes an implementation of Newton's Method with a line search
-which can solve one of these models.
-
-.. doctest::
-
-   >>> from wntr.sim.solvers import NewtonSolver
-   
-   >>> opt = NewtonSolver()
-   >>> res = opt.solve(m)
-   >>> m.x.value # doctest: +SKIP
-   1.618033988749989
-   >>> m.y.value # doctest: +SKIP
-   2.618033988749989

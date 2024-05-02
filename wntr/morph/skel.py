@@ -26,8 +26,8 @@ def skeletonize(wn, pipe_diameter_threshold, branch_trim=True, series_pipe_merge
     wn: wntr WaterNetworkModel
         Water network model
     pipe_diameter_threshold: float 
-        Pipe diameter threshold used to determine candidate pipes for 
-        skeletonization
+        Pipe diameter threshold. Pipes with diameter <= threshold are 
+        candidates for removal
     branch_trim: bool, optional
         If True, include branch trimming in skeletonization
     series_pipe_merge: bool, optional
@@ -82,7 +82,7 @@ class _Skeletonize(object):
             self.wn = wn
         
         # Get the WaterNetworkModel graph
-        G = self.wn.get_graph()
+        G = self.wn.to_graph()
         G = G.to_undirected()
         self.G = G
         
@@ -286,7 +286,7 @@ class _Skeletonize(object):
                              diameter=props['diameter'], 
                              roughness=props['roughness'], 
                              minor_loss=props['minorloss'],
-                             status=props['status']) 
+                             initial_status=props['status']) 
             self.G.add_edge(neigh_junc_name0, 
                             neigh_junc_name1, 
                             dominant_pipe.name)
@@ -346,7 +346,7 @@ class _Skeletonize(object):
                                      diameter=props['diameter'], 
                                      roughness=props['roughness'], 
                                      minor_loss=props['minorloss'],
-                                     status=props['status']) 
+                                     initial_status=props['status']) 
                     self.G.add_edge(dominant_pipe.start_node_name, 
                                     dominant_pipe.end_node_name, 
                                     dominant_pipe.name)

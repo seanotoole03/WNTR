@@ -88,23 +88,23 @@ c.host = '127.0.0.2'
 if c.open():
     is_ok = c.write_single_coil(0, True)
     if is_ok:
-        print('coil #%s: write to %s' % (0, True))
+        print('coil #%s: write to %s, connection confirmed open' % (0, True))
     else:
         print('coil #%s: unable to write %s' % (0, True))
 coils_l2 = c.read_coils(0, 10)
-print(c.read_holding_registers(0x0000,10))
+#print(c.read_holding_registers(0x0000,10))
 c.port = 502
 c.host = 'localhost'
 print(c.open())
 # if success display registers
-if coils_l:
-    print('coil ad #0 to 9: %s' % coils_l)
-else:
-    print('unable to read coils')
-if coils_l2:
-    print('coil ad #0 to 9: %s' % coils_l2)
-else:
-    print('unable to read coils')
+# if coils_l:
+    # print('coil ad #0 to 9: %s' % coils_l)
+# else:
+    # print('unable to read coils')
+# if coils_l2:
+    # print('coil ad #0 to 9: %s' % coils_l2)
+# else:
+    # print('unable to read coils')
     
     
 #internal to server 1, set holding registers
@@ -114,17 +114,18 @@ else:
 ## values pulled from servers should then be scaled by 1e-2 to get accurate values for client controller to
 ## use in control decisions.
 
-print(res2.node["pressure"].iloc[12,:])
+#print(res2.node["pressure"].iloc[12,:])
 server.data_bank.set_holding_registers(0x0000,(res2.node["pressure"].iloc[12,:])*1e2)
+print("Check MODBUS holding registers following 12hr runtime and regset: ")
 print(numpy.asarray(c.read_holding_registers(0x0000,97))*1e-2)
 
-#simulate second 2 hours
-wn_controller.set_initial_conditions(res2)
-wn_controller.options.time.pattern_start = wn_controller.options.time.pattern_start + ((12) * 3600)
-wn_controller.options.time.duration = 12 * 3600
+#simulate second 12 hours
+#wn_controller.set_initial_conditions(res2)
+#wn_controller.options.time.pattern_start = wn_controller.options.time.pattern_start + ((12) * 3600)
+wn_controller.options.time.duration = 24 * 3600
 sim2 = wntr.sim.EpanetSimulator(wn_controller)
 res3 = sim2.run_sim()
-res3._adjust_time((12)*3600)
+#res3._adjust_time((12)*3600)
 res2.append(res3)  
 res4 = abs(res1 - res2).max()
 
@@ -136,6 +137,6 @@ link_keys = ["flowrate", "velocity", "status", "setting", "headloss"]
 for key in link_keys:
     max_res_diff_link = res4.link[key].max()
 
-print(max_res_diff_node)
-print(max_res_diff_link)
+print("Verify node values for WNTR simulator multi-step runtime (2x12h blocks) with MODBUS against EPANET simulator in one 24h block. Max diff between output arrays: " + str(max_res_diff_node))
+print("Verify link values for WNTR simulator multi-step runtime (2x12h blocks) with MODBUS against EPANET simulator in one 24h block. Max diff between output arrays: " + str(max_res_diff_link))
 

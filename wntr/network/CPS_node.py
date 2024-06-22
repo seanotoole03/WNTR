@@ -4,20 +4,12 @@ from six import string_types
 import types
 from wntr.utils.ordered_set import OrderedSet
 # PLC-communication and emulation libraries
-import pymodbus
-from pymodbus.datastore import (
-    ModbusSequentialDataBlock,
-    ModbusServerContext,
-    ModbusSlaveContext,
-    ModbusSparseDataBlock,
-)
-from pymodbus.device import ModbusDeviceIdentification
-from pymodbus.server import (
-    StartAsyncSerialServer,
-    StartAsyncTcpServer,
-    StartAsyncTlsServer,
-    StartAsyncUdpServer,
-)
+
+import argparse
+import pyModbusTCP
+from pyModbusTCP.server import ModbusServer, DataHandler
+from pyModbusTCP.constants import EXP_ILLEGAL_FUNCTION
+from pyModbusTCP.client import ModbusClient
 from pycomm3 import LogixDriver
 import awlsim
 
@@ -67,7 +59,7 @@ class CPS_Node(six.with_metaclass(abc.ABCMeta, object)):
 
 
     """
-    def __init__(self, wn, name, coordinates=[0,0]):
+    def __init__(self, wn, name, coordinates=[0,0], ip='0.0.0.0'):
         self._wn = wn
         self._name = name
         self._options = wn._options
@@ -78,6 +70,10 @@ class CPS_Node(six.with_metaclass(abc.ABCMeta, object)):
         self._cps_edges = wn._cps_edges
         self._coordinates = coordinates
         self._edges = OrderedSet()
+        if (ip != '0.0.0.0'):
+            self._ip = ip
+        else:
+            self._ip = self._cps_reg.ip_assign()
 
     def _compare(self, other):
         """
@@ -182,7 +178,10 @@ class CPS_Node(six.with_metaclass(abc.ABCMeta, object)):
             )
         else: 
             self._edges.remove(edge_name)
-        
+    
+    def set_ip(ip):
+        self._ip = ip
+    
     def to_ref(self):
         return self._name
         
@@ -320,7 +319,7 @@ class SCADA(CPS_Node):
             raise ValueError(
                 "The name provided for the original control is not recognized. Please check that the control you wish disabled matches the input text."
             )
-        elif (self._controls[original_name]._cps_node != self._name) and (self._controls[control_name]._cps_node not in self._owned_list):
+        elif (self._controls[control_name]._cps_node != self._name) and (self._controls[control_name]._cps_node not in self._owned_list):
             raise ValueError(
                 "The cps_node to which this control is assigned is not one over which this unit has authority. Please check that this SCADA unit has been given authority over that cps_node via add_owned() function."
             )
@@ -402,7 +401,7 @@ class PLC(CPS_Node):
             raise ValueError(
                 "The name provided for the original control is not recognized. Please check that the control you wish disabled matches the input text."
             )
-        elif (self._controls[original_name]._cps_node != self._name):
+        elif (self._controls[control_name]._cps_node != self._name):
             raise ValueError(
                 "The cps_node to which this control is assigned is not one over which this unit has authority. Please check that this PLC unit has been given authority over that cps_node via add_owned() function."
             )
@@ -582,10 +581,12 @@ class CPS_Edge(six.with_metaclass(abc.ABCMeta, object)):
         # Set and register the starting node
         self._start_node = self._cps_reg[start_node_name]
         self._start_node_name = start_node_name
+        self._start_node_ip = self._start_node._ip
         self._cps_reg.add_usage(start_node_name, (name, self.edge_type))
         # Set and register the ending node
         self._end_node = self._cps_reg[end_node_name]
         self._end_node_name = end_node_name
+        self._end_node_ip = self._end_node._ip
         self._cps_reg.add_usage(end_node_name, (name, self.edge_type))
         # Add information about new edge to corresponding nodes
         self._cps_reg[start_node_name].add_edge(name)
@@ -605,7 +606,7 @@ class CPS_Edge(six.with_metaclass(abc.ABCMeta, object)):
         Returns
         -------
         bool
-            is these the same items
+            are these the same items
         """        
         if not type(self) == type(other):
             return False
@@ -630,14 +631,6 @@ class CPS_Edge(six.with_metaclass(abc.ABCMeta, object)):
     def name(self):
         """str: The name of the edge (read only)"""
         return self._name
-    
-    @property
-    def tag(self):
-        """str: A tag or label for the edge"""
-        return self._tag
-    @tag.setter
-    def tag(self, tag):
-        self._tag = tag
 
     @property
     def coordinates(self):
@@ -678,7 +671,31 @@ class CPS_Edge(six.with_metaclass(abc.ABCMeta, object)):
 
     def to_ref(self):
         return self._name
+    
+    def connect(start_ip='0.0.0.0', start_port=502, end_ip='0.0.0.0', end_port=502, medium='wireless', loss_rate=0.00):
+        """
+        Connection/server initialization function. 
+         Parameters
+        ----------
+        string : start_ip
+            ip of start_node (if not assigned, or requiring additional/separate ip addresses)
+        string : start_port     
+            port messages will be sent/recieved on for start_node
+        string : end_ip
+            ip of end_node (if not assigned, or requiring additional/separate ip addresses)
+        string : end_port     
+            port messages will be sent/recieved on for end_node
+        string : medium
+            medium of communication for signal transmission (wireless, wired)
+        float : loss_rate
+            
 
+        Returns
+        -------
+        bool
+            whether or not the connection established
+        """
+        pass
 
     
 
@@ -722,7 +739,9 @@ class MODBUS(CPS_Edge):
     def __init__(self, name, start_node_name, end_node_name, wn):
         super(MODBUS, self).__init__(wn, name, start_node_name, end_node_name)
         self._connection_limit = 255 #limits of modbus device count communication
-
+        self._server = ModbusServer(host=self._start_node_ip, port=502, no_block=True) #server/start on junction/CPS_node endpoint, default param port 502
+        self._c = ModbusClient(host=self._end_node_ip, port=502, auto_open=True, debug=False)
+    
     def _compare(self, other):
         if not super(MODBUS, self)._compare(other):
             return False
@@ -733,8 +752,22 @@ class MODBUS(CPS_Edge):
         """str : ``"MODBUS"`` (read only)"""
         return 'MODBUS'
     
-            
-
+    def connect(self, start_ip='0.0.0.0', start_port=502, end_ip='0.0.0.0', end_port=502, medium='wireless', loss_rate=0.00):
+        """
+        Spin up server and client together, establish connection
+        """
+        self._server = ModbusServer(host=start_ip, port=start_port, no_block=True)
+        self._server.start()
+        c = ModbusClient(host=end_ip, port=end_port, auto_open=True, debug=False)
+        print(c.open()) #check whether connection is opened
+        
+    def read_holding_registers(self, mem_loc=0x0000,mem_range=97):
+    ##Note: registers hold only 16bits, capping values storable at 65535. Thus, we should be careful to avoid
+    ## writing any values which could overflow. Most sensors seem to use 2 significant digits after the decimal,
+    ## so to preserve those in the int16 registers we should usually elevate values to be written by 1e2
+    ## values pulled from servers should then be scaled by 1e-2 to get accurate values for client controller to
+    ## use in control decisions.
+        return numpy.asarray(self._c.read_holding_registers(mem_loc,mem_range))*1e-2
         
 class EIP(CPS_Edge):
     """
@@ -865,6 +898,12 @@ class CPSNodeRegistry(Registry):
         self._listPLC = OrderedSet()
         self._listRTU = OrderedSet()
         self._wn = model
+        
+        # initialize ip list and variables
+        self._ip = '192.168.0.1'
+        self._ip_list = OrderedSet()
+        self._ip_list.add(self._ip)
+        self._ip_count = int(self._ip.split('.')[3]) # should grab '1', allowing for iteration for basic "DHCP" assignment
 
     def _finalize_(self, model):
         super()._finalize_(model)
@@ -1095,8 +1134,37 @@ class CPSNodeRegistry(Registry):
                         raise RuntimeError(
                             "Cannot remove node {0} without first removing control/rule {1}".format(name, control_name)
                         )
+        self.ip_remove(self._cps_reg[name]._ip)
         self._cps_reg.__delitem__(name)
 
+    
+    def ip_assign(self, ip='0.0.0.0'):
+        """
+        Add a new IP to the internal list. Should only be called internally during CPS device creation/assignment.
+        TODO: Either define procedures for identifying and reassigning deleted IP values when the count exceeds 255, or replace with more proper DHCP procedures
+        Yields
+        -------
+        int : new_ip    
+            integer representing new last int in IP tuple
+        """
+        new_ip = None
+        if ip != '0.0.0.0':
+            new_ip = ip
+        else:
+            self._ip_count += 1
+            new_ip_int = self._ip_count
+            new_ip = str(".".join(('127.0.0',str(new_ip_int))))
+            
+        self._ip_list.add(new_ip)
+        return new_ip
+        
+    def ip_remove(self, ip):
+        if ip in self._ip_list:
+            self._ip_list.__delitem__(ip)
+            return true
+        else:
+            print("IP: " + ip + " not in IP list, cannot be deleted. Check values.")
+            return false
 
         
 class CPSEdgeRegistry(Registry):
@@ -1452,5 +1520,4 @@ class CPSEdgeType(enum.IntEnum):
     def __eq__(self, other):
         return int(self) == int(other) and (isinstance(other, int) or \
                self.__class__.__name__ == other.__class__.__name__)
-        
  

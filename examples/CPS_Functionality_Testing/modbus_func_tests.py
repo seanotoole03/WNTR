@@ -77,16 +77,18 @@ res2 = sim2.run_sim()
 ##### CURRENT TESTING
 
 server = wn._cps_edges["s1_MOD_p1"]._server
-wn._cps_edges["s1_MOD_p1"].connect(start_ip=wn._cps_edges["s1_MOD_p1"]._start_node_ip,start_port=502,end_ip=wn._cps_edges["s1_MOD_p1"]._end_node_ip,end_port=502)
+
+wn._cps_edges["s1_MOD_p1"].init_connect(start_ip=wn._cps_edges["s1_MOD_p1"]._start_node_ip,start_port=502,end_ip=wn._cps_edges["s1_MOD_p1"]._end_node_ip,end_port=502)
+#print(wn._cps_edges["s1_MOD_p1"]._end_node_ip)
 c = wn._cps_edges["s1_MOD_p1"]._c
-print(wn._cps_edges["s1_MOD_p1"].to_dict())
+#print(wn._cps_edges["s1_MOD_p1"].to_dict())
 server2 = wn._cps_edges["s1_MOD_p2"]._server
-wn._cps_edges["s1_MOD_p2"].connect(start_ip=wn._cps_edges["s1_MOD_p2"]._start_node_ip,start_port=503,end_ip=wn._cps_edges["s1_MOD_p2"]._end_node_ip,end_port=502)
-print(wn._cps_edges["s1_MOD_p2"]._start_node_ip)
+wn._cps_edges["s1_MOD_p2"].init_connect(start_ip=wn._cps_edges["s1_MOD_p2"]._start_node_ip,start_port=503,end_ip=wn._cps_edges["s1_MOD_p2"]._end_node_ip,end_port=502)
+#print(wn._cps_edges["s1_MOD_p2"]._end_node_ip)
 #print(c.read_holding_registers(0x0000,10))
-c.port = 502
-c.host = 'localhost'
-print(c.open())
+#c.port = 502
+#c.host = 'localhost'
+#print(c.open())
 # if success display registers
 # if coils_l:
     # print('coil ad #0 to 9: %s' % coils_l)

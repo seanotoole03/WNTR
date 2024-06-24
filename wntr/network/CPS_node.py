@@ -738,8 +738,14 @@ class MODBUS(CPS_Edge):
 
     def __init__(self, name, start_node_name, end_node_name, wn):
         super(MODBUS, self).__init__(wn, name, start_node_name, end_node_name)
+        parser = argparse.ArgumentParser()
+        parser.add_argument('-H', '--host', type=str, default='localhost', help='Host (default: localhost)')
+        parser.add_argument('-p', '--port', type=int, default=502, help='TCP port (default: 502)')
+        args = parser.parse_args()
+        
         self._connection_limit = 255 #limits of modbus device count communication
         self._server = ModbusServer(host=self._start_node_ip, port=502, no_block=True) #server/start on junction/CPS_node endpoint, default param port 502
+        self._server.start()
         self._c = ModbusClient(host=self._end_node_ip, port=502, auto_open=True, debug=False)
     
     def _compare(self, other):
@@ -752,15 +758,18 @@ class MODBUS(CPS_Edge):
         """str : ``"MODBUS"`` (read only)"""
         return 'MODBUS'
     
-    def connect(self, start_ip='0.0.0.0', start_port=502, end_ip='0.0.0.0', end_port=502, medium='wireless', loss_rate=0.00):
+    def init_connect(self, start_ip='0.0.0.0', start_port=502, end_ip='0.0.0.0', end_port=502, medium='wireless', loss_rate=0.00):
         """
-        Spin up server and client together, establish connection
+        Spin up server and client together, establish connection 
         """
-        self._server = ModbusServer(host=start_ip, port=start_port, no_block=True)
+        self._server = ModbusServer(host=end_ip, port=end_port, no_block=True)
         self._server.start()
-        c = ModbusClient(host=end_ip, port=end_port, auto_open=True, debug=False)
-        print(c.open()) #check whether connection is opened
-        
+        self._c = ModbusClient(host=start_ip, port=start_port, auto_open=True, debug=False)
+        print(self._c.open()) #check whether connection is opened
+    
+    def open_connect(self):
+        print(self._c.open())
+    
     def read_holding_registers(self, mem_loc=0x0000,mem_range=97):
     ##Note: registers hold only 16bits, capping values storable at 65535. Thus, we should be careful to avoid
     ## writing any values which could overflow. Most sensors seem to use 2 significant digits after the decimal,
@@ -900,7 +909,7 @@ class CPSNodeRegistry(Registry):
         self._wn = model
         
         # initialize ip list and variables
-        self._ip = '192.168.0.1'
+        self._ip = '127.0.0.1' # defacto set registry as a sort of 'DHCP server' or 'start point' for the model?
         self._ip_list = OrderedSet()
         self._ip_list.add(self._ip)
         self._ip_count = int(self._ip.split('.')[3]) # should grab '1', allowing for iteration for basic "DHCP" assignment

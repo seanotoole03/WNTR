@@ -74,6 +74,10 @@ class CPS_Node(six.with_metaclass(abc.ABCMeta, object)):
             self._ip = ip
         else:
             self._ip = self._cps_reg.ip_assign()
+        #initialize assigned junctions and pumps as empty, assign as part of layer generation (whether automatic or manual)
+        self._junctions = OrderedSet() 
+        self._links = OrderedSet()
+        
 
     def _compare(self, other):
         """
@@ -179,9 +183,39 @@ class CPS_Node(six.with_metaclass(abc.ABCMeta, object)):
         else: 
             self._edges.remove(edge_name)
     
-    def set_ip(ip):
+    def set_ip(self, ip):
         self._ip = ip
-    
+        
+    def add_junc(self, junction):
+        if junction not in self._junctions:
+            self._junctions.add(junction)
+            
+    def del_junc(self, junction):
+        if junction in self._junctions:
+            self._junctions.__delitem__(junction)
+            
+    def add_link(self, link):
+        if link not in self._links:
+            self._links.add(link)
+            
+    def del_link(self, link):
+        if link in self._links:
+            self._links.__delitem__(link)
+            
+            
+    def dist_to_element(self, element):
+        if(self._coordinates == (0,0)):
+            print(
+                "WARNING: Coordinates of CPS_node currently (0,0). Unless this is intended, distance estimation may be inaccurate to actual location of CPS device."
+            )
+        if(isinstance(element, (Junction, Reservoir, Tank)):
+            return math.sqrt((element.coordinates()[0] - self._coordinates[0])**2 + (element.coordinates()[1] - self._coordinates[1])**2)
+        elif(isinstance(element, (Pump, Valve, Pipe)):
+            #TODO: design decision - use start_node, end_node, midpoint, or allow for choice of any of the above or a custom coordinate for determining Link element coordinates
+            #initial implementation will use start_node for simplicity and likelihood of applicability to normal pump/pipe sensor placements
+            return math.sqrt((element._start_node.coordinates()[0] - self._coordinates[0])**2 + (element._start_node.coordinates()[1] - self._coordinates[1])**2)
+            
+
     def to_ref(self):
         return self._name
         
@@ -194,8 +228,7 @@ class CPS_Node(six.with_metaclass(abc.ABCMeta, object)):
     def disable_node(self):
         for control in list(self._controls):
             if self._controls[control]._cps_node == self._name:
-                self._controls.pop(control)
-    
+                self._controls.pop(control) 
 
 class SCADA(CPS_Node):
     """

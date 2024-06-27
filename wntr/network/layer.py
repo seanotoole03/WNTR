@@ -234,7 +234,28 @@ def autogenerate_full_cps_layer(wn, placement_type='simple', timed_control_assig
                 else:
                     print("No valid timed control location preference provided, defaulting to SCADA-controlled (remote).")
                     control.assign_cps(SCADA)
-               
+    
+    # Designate which CPS devices can pull data from which "sensor" in the results objects
+    # TODO: literally O^2, is there any good way to go about doing this pairing more efficiently? 
+    for nd in wn._node_reg:
+        closest = None
+        closest_dist = 999.99
+        for cps in wn._cps_reg:
+            dist = wn._cps_reg[cps].dist_to_element(wn._node_reg[nd])
+            if(dist < closest_dist):
+                closest = wn._cps_reg[cps]
+                closest_dist = dist
+        closest.add_junc(nd)        
+    for ln in wn._link_reg:
+        closest = None
+        closest_dist = 999.99
+        for cps in wn._cps_reg:
+            dist = wn._cps_reg[cps].dist_to_element(wn._link_reg[ln])
+            if(dist < closest_dist):
+                closest = wn._cps_reg[cps]
+                closest_dist = dist
+        closest.add_link(ln)       
+    
     if placement_type == 'complex':
         # Add PLC-PLC check pairs/tuples based on N, sensor duplication based on S
         node_list = wn.cps_nodes()

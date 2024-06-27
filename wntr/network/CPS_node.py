@@ -2,6 +2,7 @@ import logging
 import six
 from six import string_types
 import types
+import math
 from wntr.utils.ordered_set import OrderedSet
 # PLC-communication and emulation libraries
 
@@ -23,6 +24,10 @@ import wntr.epanet.io
 from wntr.epanet.util import (EN, FlowUnits, HydParam, MassUnits, MixType, PressureUnits,
                    QualParam, QualType, ResultType, StatisticsType, from_si,
                    to_si)
+from wntr.network.base import AbstractModel, Link, LinkStatus, Registry
+from wntr.network.elements import  (FCValve, GPValve, HeadPump, Junction, Pattern, PBValve,
+    Pipe, PowerPump, PRValve, PSValve, Pump, Reservoir, Source, Tank, TCValve, Valve)
+                   
 import abc
 
 logger = logging.getLogger(__name__)
@@ -208,12 +213,12 @@ class CPS_Node(six.with_metaclass(abc.ABCMeta, object)):
             print(
                 "WARNING: Coordinates of CPS_node currently (0,0). Unless this is intended, distance estimation may be inaccurate to actual location of CPS device."
             )
-        if(isinstance(element, (Junction, Reservoir, Tank)):
-            return math.sqrt((element.coordinates()[0] - self._coordinates[0])**2 + (element.coordinates()[1] - self._coordinates[1])**2)
-        elif(isinstance(element, (Pump, Valve, Pipe)):
+        if(isinstance(element, (Junction, Reservoir, Tank))):
+            return math.sqrt((element._coordinates[0] - self._coordinates[0])**2 + (element._coordinates[1] - self._coordinates[1])**2)
+        elif(isinstance(element, (Pump, Valve, Pipe))):
             #TODO: design decision - use start_node, end_node, midpoint, or allow for choice of any of the above or a custom coordinate for determining Link element coordinates
             #initial implementation will use start_node for simplicity and likelihood of applicability to normal pump/pipe sensor placements
-            return math.sqrt((element._start_node.coordinates()[0] - self._coordinates[0])**2 + (element._start_node.coordinates()[1] - self._coordinates[1])**2)
+            return math.sqrt((element._start_node._coordinates[0] - self._coordinates[0])**2 + (element._start_node._coordinates[1] - self._coordinates[1])**2)
             
 
     def to_ref(self):

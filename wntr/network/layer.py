@@ -245,7 +245,7 @@ def autogenerate_full_cps_layer(wn, placement_type='simple', timed_control_assig
             if(dist < closest_dist):
                 closest = wn._cps_reg[cps]
                 closest_dist = dist
-        closest.add_junc(nd)        
+        closest.add_node(nd)        
     for ln in wn._link_reg:
         closest = None
         closest_dist = 999.99

@@ -1737,6 +1737,33 @@ class WaterNetworkModel(AbstractModel):
             node._leak_demand = None
             node._leak_status = False
             node._is_isolated = False
+            
+        # for name, node in self.nodes(Tank):
+            # node._head = None
+            # node._demand = None
+            # node._pressure = None
+            # node.init_level = float(results.node['pressure'].loc[end_time, name])
+            # # if init level overshoots or undershoot tank level boundaries, move it
+            # # inside of the accepted range by the same margin that it over/undershot.
+            # if node.init_level < node.min_level:
+                # node.init_level = node.min_level - (node.init_level - node.min_level)
+                # # assert node.init_level > node.min_level
+                
+            # if node.init_level > node.max_level:
+                # node.init_level = node.max_level - (node.init_level - node.max_level)
+            
+            # assert node.init_level > node.min_level
+            # assert node.init_level < node.max_level
+            
+            # assert node.init_level > node.min_level
+            # assert node.init_level < node.max_level
+            
+            try: node.initial_quality = float(results.node['quality'].loc[end_time, name])
+            except KeyError: pass
+            node._prev_head = node.head
+            node._leak_demand = None
+            node._leak_status = False
+            node._is_isolated = False
 
         for name, node in self.nodes(Reservoir):
             node._head = None

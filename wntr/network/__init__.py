@@ -17,3 +17,5 @@ from .io import to_dict, from_dict, to_gis, from_gis, to_graph, \
     read_json, write_json, \
     read_geojson, write_geojson, \
     read_shapefile, write_shapefile
+from .CPS_node import SCADA, PLC, RTU, MODBUS, EIP, SER, \
+    CPSNodeRegistry, CPSEdgeRegistry

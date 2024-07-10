@@ -5,6 +5,9 @@ networkx
 pandas
 matplotlib
 setuptools
+pyModbusTCP
+pycomm3
+pyserial
 
 # Optional
 plotly<=5.11.0

@@ -11,7 +11,7 @@ import pyModbusTCP
 from pyModbusTCP.server import ModbusServer, DataHandler
 from pyModbusTCP.constants import EXP_ILLEGAL_FUNCTION
 from pyModbusTCP.client import ModbusClient
-from pycomm3 import LogixDriver
+import pycomm3 
 import awlsim
 
 import enum
@@ -80,7 +80,7 @@ class CPS_Node(six.with_metaclass(abc.ABCMeta, object)):
         else:
             self._ip = self._cps_reg.ip_assign()
         #initialize assigned junctions and pumps as empty, assign as part of layer generation (whether automatic or manual)
-        self._junctions = OrderedSet() 
+        self._nodes = OrderedSet() 
         self._links = OrderedSet()
         
 
@@ -96,7 +96,7 @@ class CPS_Node(six.with_metaclass(abc.ABCMeta, object)):
         Returns
         -------
         bool
-            is these the same items
+            are these the same items
         """        
         if not type(self) == type(other):
             return False
@@ -191,13 +191,13 @@ class CPS_Node(six.with_metaclass(abc.ABCMeta, object)):
     def set_ip(self, ip):
         self._ip = ip
         
-    def add_junc(self, junction):
-        if junction not in self._junctions:
-            self._junctions.add(junction)
+    def add_node(self, node):
+        if node not in self._nodes:
+            self._nodes.add(node)
             
-    def del_junc(self, junction):
-        if junction in self._junctions:
-            self._junctions.__delitem__(junction)
+    def del_node(self, node):
+        if node in self._nodes:
+            self._nodes.__delitem__(node)
             
     def add_link(self, link):
         if link not in self._links:
@@ -206,8 +206,90 @@ class CPS_Node(six.with_metaclass(abc.ABCMeta, object)):
     def del_link(self, link):
         if link in self._links:
             self._links.__delitem__(link)
-            
-            
+    
+    def read_node_data(self, results, type='all'):
+        #pass in result data from main file following 1 or more simulation timesteps
+        """
+        Assigned sensor read function
+
+        Parameters
+        ----------
+        results : Results obj
+            results of simulation timesteps
+        type : String (optional)
+            specific type of dataframe to pull from results
+            'all' : pull all dataframes
+            'pressure'
+            'head'
+            'demand'
+            'leak demand' (WNTRSimulator only)
+            'quality' (EPANETSimulator only)
+
+        Returns
+        -------
+        dictionary of lists
+            set of results requested, limited to nodes to which this CPS_node is assigned
+        """   
+        timestamp = int(self._wn.sim_time - self._wn.options.time.hydraulic_timestep) #adjusts for timestep delta in results table
+        print(timestamp)
+        ret = OrderedDict()
+        if(type=='all'):   
+            for key in results.node.keys():
+                list = []
+                print(results.node[key].loc[timestamp,:])
+                for name, data in results.node[key].loc[timestamp,:].items():
+                    if name in self._nodes:
+                        list.add((name, data))
+                ret.append(list)
+                    
+        #elif(type=='pressure' or type=='head' or type=='demand'):
+            #TODO
+        
+        return ret
+
+    def read_link_data(self, results, type='all'):
+        #pass in result data from main file following 1 or more simulation timesteps
+        """
+        Assigned sensor read function
+
+        Parameters
+        ----------
+        results : Results obj
+            results of simulation timesteps
+        type : String (optional)
+            specific type of dataframe to pull from results
+            'all' : pull all dataframes
+            'velocity'
+            'flowrate'
+            'setting'
+            'status' 
+            'headloss' (EPANETSimulator only)
+            'friction' (EPANETSimulator only)
+            'reaction' (EPANETSimulator only)
+            'quality' (EPANETSimulator only)
+
+        Returns
+        -------
+        dictionary of lists
+            set of results requested, limited to links to which this CPS_node is assigned
+        """   
+        timestamp = int(self._wn.sim_time - self._wn.options.time.hydraulic_timestep) #adjusts for timestep delta in results table
+        print(timestamp)
+        ret = OrderedDict()
+        if(type=='all'):   
+            for key in results.link.keys():
+                list = []
+                print(results.link[key].loc[timestamp,:])
+                for name, data in results.node[key].loc[timestamp,:].items():
+                    if name in self._links:
+                        list.add((name, data))
+                ret.append(list)
+                    
+        #elif(type=='pressure' or type=='head' or type=='demand'):
+            #TODO
+        
+        return ret
+        
     def dist_to_element(self, element):
         if(self._coordinates == (0,0)):
             print(

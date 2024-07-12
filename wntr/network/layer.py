@@ -239,13 +239,16 @@ def autogenerate_full_cps_layer(wn, placement_type='simple', timed_control_assig
     # TODO: literally O^2, is there any good way to go about doing this pairing more efficiently? 
     for nd in wn._node_reg:
         closest = None
-        closest_dist = 999.99
+        closest_dist = 99999.99
         for cps in wn._cps_reg:
             dist = wn._cps_reg[cps].dist_to_element(wn._node_reg[nd])
             if(dist < closest_dist):
                 closest = wn._cps_reg[cps]
                 closest_dist = dist
-        closest.add_node(nd)        
+                #if verbose != 0:
+                        #print("Closest dist to " + wn._cps_reg[cps]._name + " is now: " + str(dist))
+        if closest != None:
+            closest.add_node(nd)        
     for ln in wn._link_reg:
         closest = None
         closest_dist = 999.99
@@ -254,7 +257,10 @@ def autogenerate_full_cps_layer(wn, placement_type='simple', timed_control_assig
             if(dist < closest_dist):
                 closest = wn._cps_reg[cps]
                 closest_dist = dist
-        closest.add_link(ln)       
+                #if verbose != 0:
+                        #print("Closest dist to " + wn._cps_reg[cps]._name + " is now: " + str(dist))
+        if closest != None: #TODO: When would there be no closest node/link? What would cause this error?  
+            closest.add_link(ln)       
     
     if placement_type == 'complex':
         # Add PLC-PLC check pairs/tuples based on N, sensor duplication based on S

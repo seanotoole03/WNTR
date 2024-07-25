@@ -25,6 +25,7 @@ import os
 # Create a water network model
 inp_file = '../networks/Net3.inp'
 wn = wntr.network.WaterNetworkModel(inp_file)
+wn2 = wntr.network.WaterNetworkModel(inp_file)
 wn_baseline = wntr.network.WaterNetworkModel(inp_file)
 i = 0
 for control_name, control in wn._controls.items():
@@ -59,12 +60,35 @@ wn._cps_edges.add_MODBUS("p1_MOD_p2","PLC1","PLC2")
 wn._cps_edges.add_SER("r1_SER_p2","RTU1","PLC2")
 wn._cps_edges.add_SER("r2_SER_p1","RTU2","PLC1")
 
+## WN2 control and PLC assignments
+i = 0
+for control_name, control in wn2._controls.items():
+            #print(control_name + " : " + control.__str__())
+            #print(control.__str__())
+            control_assign = wn2.get_control(control_name)
+            if(i<=13):
+                control_assign.assign_cps("PLC1") #does not create an actual CPS node by the name of SCADA1, simply creates a label which can be used as reference against the CPS control node registry
+            else:
+                control_assign.assign_cps("PLC2")
+            i+=1
+            
+wn2._cps_reg.add_PLC("PLC1")
+wn2._cps_reg.add_PLC("PLC2")
+wn2._cps_reg.add_SCADA("SCADA1")
+wn2._cps_reg["SCADA1"].add_owned("PLC1")
+wn2._cps_reg["SCADA1"].add_owned("PLC2")
+wn2._cps_reg.add_RTU("RTU1")
+wn2._cps_reg.add_RTU("RTU2")
+
+wn2._cps_edges.add_MODBUS("s1_MOD_p1","SCADA1","PLC1")
+wn2._cps_edges.add_MODBUS("s1_MOD_p2","SCADA1","PLC2")
+
 
 ############ Simulate hydraulics (EPANET) ############
 
 wn.options.time.hydraulic_timestep = 3600
 wn.options.time.duration = 48 * 3600 #new time of 30hr to allow for tank manipulation effect to propogate across time
-sim1 = wntr.sim.EpanetSimulator(wn)
+sim1 = wntr.sim.WNTRSimulator(wn)
 res1 = sim1.run_sim()
 
 ############ Simulate hydraulics (epanet stepped) ############
@@ -72,10 +96,10 @@ res1 = sim1.run_sim()
 # 24 hour simulation done in 1 x 12-hour chunk, 12 x 1-hour chunks
 
 #simulate first 12 hours
-wn.options.time.duration = 12 * 3600
-sim2 = wntr.sim.EpanetSimulator(wn)
+wn2.options.time.duration = 12 * 3600
+sim2 = wntr.sim.WNTRSimulator(wn2)
 res2 = sim2.run_sim()
-
+print(res2.node['head'])
 ############ Spin up communication client & servers ############
 
 # initial run (first timestep, set up the results object) 
@@ -120,9 +144,9 @@ c.close()
 #simulate 36 hours in 36 1-hour chunks
 for i in range(36):
     curr_t = 12+i+1
-    wn.options.time.duration = curr_t * 3600
-    res3 = sim2.run_sim()
-    res_groundTruth.append(res3) #keep unmodified values 
+    wn2.options.time.duration = curr_t * 3600
+    res3 = sim2.run_sim(prev_results=res2)
+    res_groundTruth.append_prioritize_self(res3) #keep unmodified values 
     #print(res3.node["head"])
     server.data_bank.set_holding_registers(0x0000,(res3.node["head"].iloc[12+i+1,:])*1e3) #store head values
     server.data_bank.set_holding_registers(0x0061,(res3.node["pressure"].iloc[12+i+1,:])*1e3) #store pressure values
@@ -142,23 +166,24 @@ for i in range(36):
             if c2.write_multiple_registers(0x0061,[int(pv*1e3)]): #overwrite t1 head with incorrect head which would read as safe
                 res3.node["pressure"].loc[(12+i+1)*3600,'1'] = pv #conditionally set backend values
                 print("Pressure value tank 1 overwritten, showing open-valve levels")
-                if wn._controls.get("control 15") != None:
-                    ctl_store["control 15"] = wn.get_control("control 15")
-                    wn._cps_reg["PLC2"].disable_control("control 15")
+                if wn2._controls.get("control 15") != None:
+                    ctl_store["control 15"] = wn2.get_control("control 15")
+                    wn2._cps_reg["PLC2"].disable_control("control 15")
                     print("Control 15 deleted.")
                 # removed control: "IF TANK 1 LEVEL BELOW 5.21208 THEN PUMP 335 STATUS IS OPEN PRIORITY 3"
-                if wn._controls.get("control 17") != None:
-                    ctl_store["control 17"] = wn.get_control("control 17")
-                    wn._cps_reg["PLC2"].disable_control("control 17")
+                if wn2._controls.get("control 17") != None:
+                    ctl_store["control 17"] = wn2.get_control("control 17")
+                    wn2._cps_reg["PLC2"].disable_control("control 17")
                     print("Control 17 deleted.")
                 # removed control: "IF TANK 1 LEVEL BELOW 5.21208 THEN PIPE 330 STATUS IS CLOSED PRIORITY 3"
                 #wn.set_initial_conditions(res3) #only applies to controller perception, not ground truth
         else: 
             if len(ctl_store) != 0: #re-add controls for timesteps where attack does not take effect
                 for control_name, control in ctl_store.items():
-                    wn.add_control(control_name, control)
+                    wn2.add_control(control_name, control)
                     print("Control {name} re-added.".format(name=control_name))
                 ctl_store.clear()
+                
     c2.close()
     c.open()
     print("SCADA client can still connect: {open} ".format(open = c.is_open))    
@@ -166,6 +191,7 @@ for i in range(36):
     #print(numpy.asarray(c.read_holding_registers(0x0000,97))*1e-2)
     #print(res3.node["head"].iloc[12+i+1,:]*1e3)
     res2.append(res3)  #append tampered values
+
 #print(res1.link)
 #print(res2.link)
 #print("Final holding register states (node head):")
@@ -179,16 +205,16 @@ node_keys = ["demand", "head", "pressure"]
 for key in node_keys:
     max_res_diff_node = res4.node[key].max()
 
-link_keys = ["flowrate", "velocity", "status", "setting", "headloss"]
+link_keys = ["flowrate", "velocity", "status", "setting"]
 for key in link_keys:
     max_res_diff_link = res4.link[key].max()
 
-print("Verify node values for EPANET simulator multi-step runtime (1x12h block + 12x1h blocks) with MODBUS against EPANET simulator in one 24h block. Max diff between output arrays: " + str(max_res_diff_node))
-print("Verify link values for EPANET simulator multi-step runtime (1x12h block + 12x1h blocks) with MODBUS against EPANET simulator in one 24h block. Max diff between output arrays: " + str(max_res_diff_link))
+print("Verify node values for WNTR simulator multi-step runtime (1x12h block + 12x1h blocks) with MODBUS against WNTR simulator in one 24h block. Max diff between output arrays: " + str(max_res_diff_node))
+print("Verify link values for WNTR simulator multi-step runtime (1x12h block + 12x1h blocks) with MODBUS against WNTR simulator in one 24h block. Max diff between output arrays: " + str(max_res_diff_link))
 
 wn_baseline.options.time.hydraulic_timestep = 3600
 wn_baseline.options.time.duration = 48 * 3600
-simbase = wntr.sim.EpanetSimulator(wn_baseline)
+simbase = wntr.sim.WNTRSimulator(wn_baseline)
 resbase = simbase.run_sim()
 
 #plotting experiment

@@ -1189,7 +1189,7 @@ class WNTRSimulator(WaterNetworkSimulator):
 
     def run_sim(self, solver=NewtonSolver, backup_solver=None, solver_options=None,
                 backup_solver_options=None, convergence_error=False, HW_approx='default',
-                diagnostics=False):
+                diagnostics=False, prev_results=None):
 
         """
         Run an extended period simulation (hydraulics only).
@@ -1353,7 +1353,9 @@ class WNTRSimulator(WaterNetworkSimulator):
                 break
 
         wntr.sim.hydraulics.get_results(self._wn, results, node_res, link_res)
-        
+        #print(results.time)
+        if prev_results != None and isinstance(prev_results, wntr.sim.results.SimulationResults):
+            results = prev_results.append(results)
         return results
 
     def _initialize_name_id_maps(self):

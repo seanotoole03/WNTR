@@ -277,6 +277,63 @@ class SimulationResults:
                     self_dict[key] = pd.concat([temp[~temp.index.isin(overlap)], other_df])
         return self
 
+    def append_prioritize_self(self, other):
+        """
+        Combine two results objects into a single, new result object.
+        If the times overlap, then the results from the `self` object will take precedence 
+        over the values in the calling object. I.e., given ``A.append(B)``, 
+        where ``A`` and ``B``
+        are both `SimluationResults`, any results from ``B`` that relate to times equal to or
+        greater than the starting time of results in ``A`` will be dropped.
+
+        .. warning::
+        
+            This operations will be performed "in-place" and will change ``A``
+
+
+        Parameters
+        ----------
+        other : SimulationResults
+            Results objects from a different, and subsequent, simulation.
+            
+        Returns
+        -------
+        self : SimulationResults
+
+        Raises
+        ------
+        ValueError
+            if `other` is the wrong type
+        
+        """
+        if not isinstance(other, SimulationResults):
+            raise ValueError(f"operating on a results object requires both be SimulationResults")
+        #NOTE: Below two lines assume that results object has the node attribute and "head" key
+
+        for attr in self._data_attributes:
+            self_dict = getattr(self, attr)
+            other_dict = getattr(other, attr)
+            
+            # query for any dataframe to get shape of df in each results object
+            self_attr_dataframe = list(self_dict.values())[0]
+            other_attr_dataframe = list(other_dict.values())[0]
+
+
+            all_keys = list(self_dict.keys()) + list(other_dict.keys())
+            for key in all_keys:
+                self_df = self_dict[key]
+                other_df = other_dict[key]
+                overlap = self_df.index.intersection(other_df.index)
+                if key in self_dict.keys() and key in other_dict.keys():
+                    self_dict[key] = pd.concat([self_df, other_df[~other_df.index.isin(overlap)]])
+                elif key not in other_dict.keys():
+                    temp = other_attr_dataframe * np.nan
+                    self_dict[key] = pd.concat([self_df[~self_df.index.isin(overlap)], temp])
+                elif key not in self_dict.keys():
+                    temp = self_attr_dataframe * np.nan
+                    self_dict[key] = pd.concat([temp[~temp.index.isin(overlap)], other_df])
+        return self
+        
     def deep_copy(self):
         """
         Return results object which is a deep copy of this results object 

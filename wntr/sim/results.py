@@ -276,3 +276,29 @@ class SimulationResults:
                     temp = self_attr_dataframe * np.nan
                     self_dict[key] = pd.concat([temp[~temp.index.isin(overlap)], other_df])
         return self
+
+    def deep_copy(self):
+        """
+        Return results object which is a deep copy of this results object 
+
+        Parameters
+        ----------
+            
+        Returns
+        -------
+        copy : SimulationResults
+
+        Raises
+        ------
+
+        
+        """
+        new = SimulationResults()
+        new.network_name = "{}".format(
+            self.network_name
+        )        
+        for attr in new._data_attributes:
+            for key in getattr(self, attr).keys():
+                self_dict = getattr(self, attr)
+                getattr(new, attr)[key] = self_dict[key]
+        return new

@@ -8,6 +8,7 @@ import wntr.metrics.topographic
 import plotly.express as px
 import networkx as nx
 import numpy
+from collections import OrderedDict
 
 import argparse
 from pyModbusTCP.server import ModbusServer, DataHandler
@@ -30,7 +31,7 @@ for control_name, control in wn._controls.items():
             #print(control_name + " : " + control.__str__())
             #print(control.__str__())
             control_assign = wn.get_control(control_name)
-            if(i<13):
+            if(i<=13):
                 control_assign.assign_cps("PLC1") #does not create an actual CPS node by the name of SCADA1, simply creates a label which can be used as reference against the CPS control node registry
             else:
                 control_assign.assign_cps("PLC2")
@@ -62,7 +63,7 @@ wn._cps_edges.add_SER("r2_SER_p1","RTU2","PLC1")
 ############ Simulate hydraulics (EPANET) ############
 
 wn.options.time.hydraulic_timestep = 3600
-wn.options.time.duration = 30 * 3600 #new time of 30hr to allow for tank manipulation effect to propogate across time
+wn.options.time.duration = 48 * 3600 #new time of 30hr to allow for tank manipulation effect to propogate across time
 sim1 = wntr.sim.EpanetSimulator(wn)
 res1 = sim1.run_sim()
 
@@ -113,17 +114,20 @@ print("Check MODBUS holding registers following 12hr runtime and regset: ")
 c.open()
 print(numpy.array(c.read_holding_registers(0x0000,97), dtype=numpy.float32)*1e-3)
 #np.array([1.0000123456789, 2.0000123456789, 3.0000123456789], dtype=np.float64)
+res_groundTruth = res2.deep_copy()
+ctl_store = OrderedDict()
 c.close()
-#simulate second 18 hours in 18 1-hour chunks
-for i in range(18):
+#simulate 36 hours in 36 1-hour chunks
+for i in range(36):
     curr_t = 12+i+1
     wn.options.time.duration = curr_t * 3600
     res3 = sim2.run_sim()
+    res_groundTruth.append(res3) #keep unmodified values 
     #print(res3.node["head"])
     server.data_bank.set_holding_registers(0x0000,(res3.node["head"].iloc[12+i+1,:])*1e3) #store head values
     server.data_bank.set_holding_registers(0x0061,(res3.node["pressure"].iloc[12+i+1,:])*1e3) #store pressure values
     c2.open()
-    print("Pulled MODBUS holding registers following {time} hr runtime and regset: {open} ".format(time = curr_t, open = c2.is_open))
+    #print("Pulled MODBUS holding registers following {time} hr runtime and regset: {open} ".format(time = curr_t, open = c2.is_open))
 
     if i >= 7: #at 18hr into simulation, overwrite head values for tank1 to cause tank to continue to drain
         h = numpy.array(c2.read_holding_registers(0x0000,97), dtype=numpy.float32)*1e-3 #read head values
@@ -133,29 +137,45 @@ for i in range(18):
             nv = 45.17+r
             pv = 7.6+r
             if c2.write_single_register(0x005E,int(nv*1e3)): #overwrite t1 head at reg 94 (hex 5E) with incorrect head which would read as above switching level
-                res3.node["head"].iloc[12+i+1,94] = nv #conditionally set backend values
+                res3.node["head"].loc[(12+i+1)*3600,'1'] = nv #conditionally set backend values
                 print("Head value tank 1 overwritten, showing open-valve levels")
             if c2.write_multiple_registers(0x0061,[int(pv*1e3)]): #overwrite t1 head with incorrect head which would read as safe
-                res3.node["pressure"].iloc[12+i+1,94] = pv #conditionally set backend values
+                res3.node["pressure"].loc[(12+i+1)*3600,'1'] = pv #conditionally set backend values
                 print("Pressure value tank 1 overwritten, showing open-valve levels")
-                wn.set_initial_conditions(res3)
+                if wn._controls.get("control 15") != None:
+                    ctl_store["control 15"] = wn.get_control("control 15")
+                    wn._cps_reg["PLC2"].disable_control("control 15")
+                    print("Control 15 deleted.")
+                # removed control: "IF TANK 1 LEVEL BELOW 5.21208 THEN PUMP 335 STATUS IS OPEN PRIORITY 3"
+                if wn._controls.get("control 17") != None:
+                    ctl_store["control 17"] = wn.get_control("control 17")
+                    wn._cps_reg["PLC2"].disable_control("control 17")
+                    print("Control 17 deleted.")
+                # removed control: "IF TANK 1 LEVEL BELOW 5.21208 THEN PIPE 330 STATUS IS CLOSED PRIORITY 3"
+                #wn.set_initial_conditions(res3) #only applies to controller perception, not ground truth
+        else: 
+            if len(ctl_store) != 0: #re-add controls for timesteps where attack does not take effect
+                for control_name, control in ctl_store.items():
+                    wn.add_control(control_name, control)
+                    print("Control {name} re-added.".format(name=control_name))
+                ctl_store.clear()
     c2.close()
     c.open()
     print("SCADA client can still connect: {open} ".format(open = c.is_open))    
     c.close()
     #print(numpy.asarray(c.read_holding_registers(0x0000,97))*1e-2)
-    print(res3.node["head"].iloc[12+i+1,:]*1e3)
-    res2.append(res3)  
+    #print(res3.node["head"].iloc[12+i+1,:]*1e3)
+    res2.append(res3)  #append tampered values
 #print(res1.link)
 #print(res2.link)
-print("Final holding register states (node head):")
-c.open()
-print(numpy.array(c.read_holding_registers(0x0000,97), dtype=numpy.float32)*1e-3)
-c.close()
+#print("Final holding register states (node head):")
+#c.open()
+#print(numpy.array(c.read_holding_registers(0x0000,97), dtype=numpy.float32)*1e-3)
+#c.close()
 res4 = abs(res1 - res2).max()
 #print(res4.link)
 
-node_keys = ["demand", "head", "head"]
+node_keys = ["demand", "head", "pressure"]
 for key in node_keys:
     max_res_diff_node = res4.node[key].max()
 
@@ -166,5 +186,32 @@ for key in link_keys:
 print("Verify node values for EPANET simulator multi-step runtime (1x12h block + 12x1h blocks) with MODBUS against EPANET simulator in one 24h block. Max diff between output arrays: " + str(max_res_diff_node))
 print("Verify link values for EPANET simulator multi-step runtime (1x12h block + 12x1h blocks) with MODBUS against EPANET simulator in one 24h block. Max diff between output arrays: " + str(max_res_diff_link))
 
+wn_baseline.options.time.hydraulic_timestep = 3600
+wn_baseline.options.time.duration = 48 * 3600
 simbase = wntr.sim.EpanetSimulator(wn_baseline)
 resbase = simbase.run_sim()
+
+#plotting experiment
+pressure1 = res2.node['head'].loc[:,wn.node_name_list]
+print(pressure1)
+groundtruth = res_groundTruth.node['head'].loc[:,wn.node_name_list]
+print(groundtruth)
+pressurebase = resbase.node['head'].loc[:, wn_baseline.node_name_list]
+#tankH = tankH * 3.28084 # Convert tank head to ft
+pressure1.index /= 3600 # convert time to hours
+fig = px.line(pressure1)
+fig = fig.update_layout(xaxis_title='Time (hr)', yaxis_title='Head (ft)',
+                  template='simple_white', width=800, height=500)
+fig.write_html('CPS_Net3_Attack_MODBUS_T1_head_falseFeedback.html')
+
+groundtruth.index /= 3600 # convert time to hours
+figg = px.line(groundtruth)
+figg = figg.update_layout(xaxis_title='Time (hr)', yaxis_title='Head (ft)',
+                  template='simple_white', width=800, height=500)
+figg.write_html('CPS_Net3_Attack_MODBUS_T1_head_groundTruth.html')
+
+pressurebase.index /= 3600 # convert time to hours
+figb = px.line(pressurebase)
+figb = figb.update_layout(xaxis_title='Time (hr)', yaxis_title='Head (ft)',
+                  template='simple_white', width=800, height=500)
+figb.write_html('CPS_Net3_Baseline_head.html')

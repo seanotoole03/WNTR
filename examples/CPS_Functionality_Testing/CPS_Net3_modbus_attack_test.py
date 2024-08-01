@@ -23,7 +23,7 @@ import serial
 import os
 #print(os.environ.get('VIRTUAL_ENV'))
 # Create a water network model
-inp_file = '../networks/Net3.inp'
+inp_file = 'examples/networks/Net3.inp'
 wn = wntr.network.WaterNetworkModel(inp_file)
 wn2 = wntr.network.WaterNetworkModel(inp_file)
 wn_baseline = wntr.network.WaterNetworkModel(inp_file)
@@ -99,6 +99,7 @@ res1 = sim1.run_sim()
 wn2.options.time.duration = 12 * 3600
 sim2 = wntr.sim.WNTRSimulator(wn2)
 res2 = sim2.run_sim()
+wn2.options.time.pattern_start = wn2.options.time.pattern_start + (12 * 3600)
 print(res2.node['head'])
 ############ Spin up communication client & servers ############
 
@@ -144,19 +145,20 @@ c.close()
 #simulate 36 hours in 36 1-hour chunks
 for i in range(36):
     curr_t = 12+i+1
-    wn2.options.time.duration = curr_t * 3600
-    res3 = sim2.run_sim(prev_results=res2)
-    res_groundTruth.append_prioritize_self(res3) #keep unmodified values 
+    wn2.options.time.duration = 1 * 3600
+    res3 = sim2.run_sim(prev_results=res_groundTruth)
+    #res3._adjust_time(12+i*3600)
+    res_groundTruth.append(res3, overwrite=False) #keep unmodified values 
     #print(res3.node["head"])
-    server.data_bank.set_holding_registers(0x0000,(res3.node["head"].iloc[12+i+1,:])*1e3) #store head values
-    server.data_bank.set_holding_registers(0x0061,(res3.node["pressure"].iloc[12+i+1,:])*1e3) #store pressure values
+    server.data_bank.set_holding_registers(0x0000,(res3.node["head"].iloc[curr_t,:])*1e3) #store head values
+    server.data_bank.set_holding_registers(0x0061,(res3.node["pressure"].iloc[curr_t,:])*1e3) #store pressure values
     c2.open()
     #print("Pulled MODBUS holding registers following {time} hr runtime and regset: {open} ".format(time = curr_t, open = c2.is_open))
 
     if i >= 7: #at 18hr into simulation, overwrite head values for tank1 to cause tank to continue to drain
         h = numpy.array(c2.read_holding_registers(0x0000,97), dtype=numpy.float32)*1e-3 #read head values
         p = numpy.array(c2.read_holding_registers(0x0061,97), dtype=numpy.float32)*1e-3 #read pressure values
-        if (h[94]-39.96) < 5.21: #head(meters)-initial elevation; 5.21m = 17.1ft; 45.17m ~> 17.1ft relative head
+        if (h[92]-39.96) < 5.21: #head(meters)-initial elevation; 5.21m = 17.1ft; 45.17m ~> 17.1ft relative head
             r = rand.gauss(0.1,0.03)
             nv = 45.17+r
             pv = 7.6+r
@@ -191,6 +193,9 @@ for i in range(36):
     #print(numpy.asarray(c.read_holding_registers(0x0000,97))*1e-2)
     #print(res3.node["head"].iloc[12+i+1,:]*1e3)
     res2.append(res3)  #append tampered values
+    wn2.options.time.pattern_start = wn2.options.time.pattern_start + (1 * 3600)
+    wn2.set_initial_conditions(res_groundTruth)
+    sim2 = wntr.sim.WNTRSimulator(wn2)
 
 #print(res1.link)
 #print(res2.link)

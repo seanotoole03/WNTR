@@ -1355,7 +1355,11 @@ class WNTRSimulator(WaterNetworkSimulator):
         wntr.sim.hydraulics.get_results(self._wn, results, node_res, link_res)
         #print(results.time)
         if prev_results != None and isinstance(prev_results, wntr.sim.results.SimulationResults):
-            results = prev_results.append(results)
+            if not results.node['head'].index.intersection(prev_results.node['head'].index).empty:
+                results._adjust_time(prev_results.node['head'].index.max())
+                results = prev_results.append(results,overwrite=False)
+            else:
+                results = prev_results.append(results,overwrite=False)
         return results
 
     def _initialize_name_id_maps(self):

@@ -220,7 +220,8 @@ class SimulationResults:
                     self_dict[key].index += ts
         return self
 
-    def append(self, other):
+
+    def append(self, other, overwrite=True):
         """
         Combine two results objects into a single, new result object.
         If the times overlap, then the results from the `other` object will take precedence 
@@ -267,21 +268,33 @@ class SimulationResults:
                 self_df = self_dict[key]
                 other_df = other_dict[key]
                 overlap = self_df.index.intersection(other_df.index)
-                if key in self_dict.keys() and key in other_dict.keys():
-                    self_dict[key] = pd.concat([self_df[~self_df.index.isin(overlap)], other_df])
-                elif key not in other_dict.keys():
-                    temp = other_attr_dataframe * np.nan
-                    self_dict[key] = pd.concat([self_df[~self_df.index.isin(overlap)], temp])
-                elif key not in self_dict.keys():
-                    temp = self_attr_dataframe * np.nan
-                    self_dict[key] = pd.concat([temp[~temp.index.isin(overlap)], other_df])
+                if overwrite:
+                    if key in self_dict.keys() and key in other_dict.keys():
+                        self_dict[key] = pd.concat([self_df[~self_df.index.isin(overlap)], other_df])
+                    elif key not in other_dict.keys():
+                        temp = other_attr_dataframe * np.nan
+                        self_dict[key] = pd.concat([self_df[~self_df.index.isin(overlap)], temp])
+                    elif key not in self_dict.keys():
+                        temp = self_attr_dataframe * np.nan
+                        self_dict[key] = pd.concat([temp[~temp.index.isin(overlap)], other_df])
+
+                else:
+                    if key in self_dict.keys() and key in other_dict.keys():
+                        self_dict[key] = pd.concat([self_df, other_df[~other_df.index.isin(overlap)]])
+                    elif key not in other_dict.keys():
+                        temp = other_attr_dataframe * np.nan
+                        self_dict[key] = pd.concat([self_df, temp[~temp.index.isin(overlap)]])
+                    elif key not in self_dict.keys():
+                        temp = self_attr_dataframe * np.nan
+                        self_dict[key] = pd.concat([temp, other_df[~other_df.index.isin(overlap)]])
         return self
+        
 
     def append_prioritize_self(self, other):
         """
         Combine two results objects into a single, new result object.
-        If the times overlap, then the results from the `self` object will take precedence 
-        over the values in the calling object. I.e., given ``A.append(B)``, 
+        If the times overlap, then the results from the calling object will take precedence 
+        over the values in the `other` object. I.e., given ``A.append(B)``, 
         where ``A`` and ``B``
         are both `SimluationResults`, any results from ``B`` that relate to times equal to or
         greater than the starting time of results in ``A`` will be dropped.

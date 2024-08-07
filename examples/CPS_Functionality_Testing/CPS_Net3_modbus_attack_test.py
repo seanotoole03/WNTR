@@ -95,12 +95,19 @@ res1 = sim1.run_sim()
 
 # 24 hour simulation done in 1 x 12-hour chunk, 12 x 1-hour chunks
 
-#simulate first 12 hours
-wn2.options.time.duration = 12 * 3600
+##### ATTACK ON PUMP 10
+ctl_store = OrderedDict()
+if wn2._controls.get("control 3") != None:
+    ctl_store["control 3"] = wn2.get_control("control 3")
+    wn2._cps_reg["PLC1"].disable_control("control 3")
+    print("Control 3 deleted.")
+#simulate first 24 hours
+wn2.options.time.duration = 24 * 3600
 sim2 = wntr.sim.WNTRSimulator(wn2)
 res2 = sim2.run_sim()
-wn2.options.time.pattern_start = wn2.options.time.pattern_start + (12 * 3600)
+wn2.options.time.pattern_start = wn2.options.time.pattern_start + (24 * 3600)
 print(res2.node['head'])
+wn2.set_initial_conditions(res2)
 ############ Spin up communication client & servers ############
 
 # initial run (first timestep, set up the results object) 
@@ -140,11 +147,10 @@ c.open()
 print(numpy.array(c.read_holding_registers(0x0000,97), dtype=numpy.float32)*1e-3)
 #np.array([1.0000123456789, 2.0000123456789, 3.0000123456789], dtype=np.float64)
 res_groundTruth = res2.deep_copy()
-ctl_store = OrderedDict()
 c.close()
 #simulate 36 hours in 36 1-hour chunks
-for i in range(36):
-    curr_t = 12+i+1
+for i in range(24):
+    curr_t = 24+i+1
     wn2.options.time.duration = 1 * 3600
     res3 = sim2.run_sim(prev_results=res_groundTruth)
     #res3._adjust_time(12+i*3600)
@@ -155,7 +161,7 @@ for i in range(36):
     c2.open()
     #print("Pulled MODBUS holding registers following {time} hr runtime and regset: {open} ".format(time = curr_t, open = c2.is_open))
 
-    if i >= 7: #at 18hr into simulation, overwrite head values for tank1 to cause tank to continue to drain
+    if i >= 0: #at 18hr into simulation, overwrite head values for tank1 to cause tank to continue to drain
         h = numpy.array(c2.read_holding_registers(0x0000,97), dtype=numpy.float32)*1e-3 #read head values
         p = numpy.array(c2.read_holding_registers(0x0061,97), dtype=numpy.float32)*1e-3 #read pressure values
         if (h[92]-39.96) < 5.21: #head(meters)-initial elevation; 5.21m = 17.1ft; 45.17m ~> 17.1ft relative head
@@ -179,12 +185,12 @@ for i in range(36):
                     print("Control 17 deleted.")
                 # removed control: "IF TANK 1 LEVEL BELOW 5.21208 THEN PIPE 330 STATUS IS CLOSED PRIORITY 3"
                 #wn.set_initial_conditions(res3) #only applies to controller perception, not ground truth
-        else: 
-            if len(ctl_store) != 0: #re-add controls for timesteps where attack does not take effect
-                for control_name, control in ctl_store.items():
-                    wn2.add_control(control_name, control)
-                    print("Control {name} re-added.".format(name=control_name))
-                ctl_store.clear()
+        # else: 
+        #     if len(ctl_store) != 0: #re-add controls for timesteps where attack does not take effect
+        #         for control_name, control in ctl_store.items():
+        #             wn2.add_control(control_name, control)
+        #             print("Control {name} re-added.".format(name=control_name))
+        #         ctl_store.clear()
                 
     c2.close()
     c.open()
@@ -192,9 +198,9 @@ for i in range(36):
     c.close()
     #print(numpy.asarray(c.read_holding_registers(0x0000,97))*1e-2)
     #print(res3.node["head"].iloc[12+i+1,:]*1e3)
-    res2.append(res3)  #append tampered values
+    res2.append(res3,overwrite=True)  #append tampered values
+    wn2.set_initial_conditions(res_groundTruth, ts=3600)
     wn2.options.time.pattern_start = wn2.options.time.pattern_start + (1 * 3600)
-    wn2.set_initial_conditions(res_groundTruth)
     sim2 = wntr.sim.WNTRSimulator(wn2)
 
 #print(res1.link)

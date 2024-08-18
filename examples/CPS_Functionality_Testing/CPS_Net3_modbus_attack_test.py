@@ -102,7 +102,7 @@ if wn2._controls.get("control 3") != None:
     wn2._cps_reg["PLC1"].disable_control("control 3")
     print("Control 3 deleted.")
 #simulate first 24 hours
-wn2.options.time.duration = 24 * 3600
+wn2.options.time.duration = 20 * 3600
 sim2 = wntr.sim.WNTRSimulator(wn2)
 res2 = sim2.run_sim()
 wn2.options.time.pattern_start = wn2.options.time.pattern_start + (24 * 3600)
@@ -147,12 +147,13 @@ c.open()
 print(numpy.array(c.read_holding_registers(0x0000,97), dtype=numpy.float32)*1e-3)
 #np.array([1.0000123456789, 2.0000123456789, 3.0000123456789], dtype=np.float64)
 res_groundTruth = res2.deep_copy()
+res3 = res2.deep_copy()
 c.close()
 #simulate 36 hours in 36 1-hour chunks
-for i in range(24):
-    curr_t = 24+i+1
+for i in range(28):
+    curr_t = 20+i+1
     wn2.options.time.duration = 1 * 3600
-    res3 = sim2.run_sim(prev_results=res_groundTruth)
+    res3 = res3.append(sim2.run_sim(prev_results=res_groundTruth), overwrite=False)
     #res3._adjust_time(12+i*3600)
     res_groundTruth.append(res3, overwrite=False) #keep unmodified values 
     #print(res3.node["head"])
@@ -160,19 +161,25 @@ for i in range(24):
     server.data_bank.set_holding_registers(0x0061,(res3.node["pressure"].iloc[curr_t,:])*1e3) #store pressure values
     c2.open()
     #print("Pulled MODBUS holding registers following {time} hr runtime and regset: {open} ".format(time = curr_t, open = c2.is_open))
-
-    if i >= 0: #at 18hr into simulation, overwrite head values for tank1 to cause tank to continue to drain
+    flag = False
+    if i >= 0: #at 24hr into simulation, start overwriting head values for tank1 to cause tank to continue to drain when possible
         h = numpy.array(c2.read_holding_registers(0x0000,97), dtype=numpy.float32)*1e-3 #read head values
         p = numpy.array(c2.read_holding_registers(0x0061,97), dtype=numpy.float32)*1e-3 #read pressure values
         if (h[92]-39.96) < 5.21: #head(meters)-initial elevation; 5.21m = 17.1ft; 45.17m ~> 17.1ft relative head
+            flag = True
             r = rand.gauss(0.1,0.03)
             nv = 45.17+r
             pv = 7.6+r
             if c2.write_single_register(0x005E,int(nv*1e3)): #overwrite t1 head at reg 94 (hex 5E) with incorrect head which would read as above switching level
-                res3.node["head"].loc[(12+i+1)*3600,'1'] = nv #conditionally set backend values
+                res3.node["head"].loc[(20+i+1)*3600,'1'] = nv #conditionally set backend values
                 print("Head value tank 1 overwritten, showing open-valve levels")
+                ############ MANUAL DRIFT/STATUS FIX: OVERWRITE PUMP STATUS TO 'CLOSED' ############
+                if res3.link['status']['335'][curr_t*3600] == 1: 
+                    res_groundTruth.link['status']['335'][curr_t*3600] = 0
+                    #res3.link['status']['335'][curr_t*3600] = 0
+                ####################################################################################    
             if c2.write_multiple_registers(0x0061,[int(pv*1e3)]): #overwrite t1 head with incorrect head which would read as safe
-                res3.node["pressure"].loc[(12+i+1)*3600,'1'] = pv #conditionally set backend values
+                res3.node["pressure"].loc[(20+i+1)*3600,'1'] = pv #conditionally set backend values
                 print("Pressure value tank 1 overwritten, showing open-valve levels")
                 if wn2._controls.get("control 15") != None:
                     ctl_store["control 15"] = wn2.get_control("control 15")
@@ -185,7 +192,7 @@ for i in range(24):
                     print("Control 17 deleted.")
                 # removed control: "IF TANK 1 LEVEL BELOW 5.21208 THEN PIPE 330 STATUS IS CLOSED PRIORITY 3"
                 #wn.set_initial_conditions(res3) #only applies to controller perception, not ground truth
-        # else: 
+        #else:              
         #     if len(ctl_store) != 0: #re-add controls for timesteps where attack does not take effect
         #         for control_name, control in ctl_store.items():
         #             wn2.add_control(control_name, control)
@@ -201,6 +208,16 @@ for i in range(24):
     res2.append(res3,overwrite=True)  #append tampered values
     wn2.set_initial_conditions(res_groundTruth, ts=3600)
     wn2.options.time.pattern_start = wn2.options.time.pattern_start + (1 * 3600)
+    if(flag):
+        if wn2._controls.get("control 15") != None:
+            ctl_store["control 15"] = wn2.get_control("control 15")
+            wn2._cps_reg["PLC2"].disable_control("control 15")
+            #print("Control 15 deleted.")
+        # removed control: "IF TANK 1 LEVEL BELOW 5.21208 THEN PUMP 335 STATUS IS OPEN PRIORITY 3"
+        if wn2._controls.get("control 17") != None:
+            ctl_store["control 17"] = wn2.get_control("control 17")
+            wn2._cps_reg["PLC2"].disable_control("control 17")
+            #print("Control 17 deleted.")
     sim2 = wntr.sim.WNTRSimulator(wn2)
 
 #print(res1.link)
@@ -229,14 +246,14 @@ simbase = wntr.sim.WNTRSimulator(wn_baseline)
 resbase = simbase.run_sim()
 
 #plotting experiment
-pressure1 = res2.node['head'].loc[:,wn.node_name_list]
-print(pressure1)
-groundtruth = res_groundTruth.node['head'].loc[:,wn.node_name_list]
-print(groundtruth)
-pressurebase = resbase.node['head'].loc[:, wn_baseline.node_name_list]
-#tankH = tankH * 3.28084 # Convert tank head to ft
-pressure1.index /= 3600 # convert time to hours
-fig = px.line(pressure1)
+res2H = res2.node['head'].loc[:,wn2.node_name_list]
+print(res2H)
+groundtruth = res_groundTruth.node['head'].loc[:,wn2.node_name_list]
+#print(groundtruth)
+headbase = resbase.node['head'].loc[:, wn_baseline.node_name_list]
+#headbase = headbase * 3.28084 # Convert tank head to ft
+res2H.index /= 3600 # convert time to hours
+fig = px.line(res2H)
 fig = fig.update_layout(xaxis_title='Time (hr)', yaxis_title='Head (ft)',
                   template='simple_white', width=800, height=500)
 fig.write_html('CPS_Net3_Attack_MODBUS_T1_head_falseFeedback.html')
@@ -247,8 +264,8 @@ figg = figg.update_layout(xaxis_title='Time (hr)', yaxis_title='Head (ft)',
                   template='simple_white', width=800, height=500)
 figg.write_html('CPS_Net3_Attack_MODBUS_T1_head_groundTruth.html')
 
-pressurebase.index /= 3600 # convert time to hours
-figb = px.line(pressurebase)
+headbase.index /= 3600 # convert time to hours
+figb = px.line(headbase)
 figb = figb.update_layout(xaxis_title='Time (hr)', yaxis_title='Head (ft)',
                   template='simple_white', width=800, height=500)
 figb.write_html('CPS_Net3_Baseline_head.html')

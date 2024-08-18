@@ -287,6 +287,7 @@ class SimulationResults:
                     elif key not in self_dict.keys():
                         temp = self_attr_dataframe * np.nan
                         self_dict[key] = pd.concat([temp, other_df[~other_df.index.isin(overlap)]])
+                self_dict[key].sort_index(inplace=True)
         return self
         
 

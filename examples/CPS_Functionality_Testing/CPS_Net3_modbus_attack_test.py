@@ -3,6 +3,8 @@ The following test shows a full implementation of basic CPS_Node features of the
 """
 import wntr
 from wntr.network.CPS_node import SCADA, PLC, RTU, MODBUS, EIP, SER, CPSNodeRegistry, CPSEdgeRegistry
+from wntr.network.base import LinkStatus
+from wntr.network.controls import ControlPriority
 import wntr.network.io
 import wntr.metrics.topographic
 import plotly.express as px
@@ -27,6 +29,9 @@ inp_file = 'examples/networks/Net3.inp'
 wn = wntr.network.WaterNetworkModel(inp_file)
 wn2 = wntr.network.WaterNetworkModel(inp_file)
 wn_baseline = wntr.network.WaterNetworkModel(inp_file)
+wn.options.hydraulic.demand_model = 'PDD'
+wn2.options.hydraulic.demand_model = 'PDD'
+wn_baseline.options.hydraulic.demand_model = 'PDD'
 i = 0
 for control_name, control in wn._controls.items():
             #print(control_name + " : " + control.__str__())
@@ -175,8 +180,24 @@ for i in range(28):
                 print("Head value tank 1 overwritten, showing open-valve levels")
                 ############ MANUAL DRIFT/STATUS FIX: OVERWRITE PUMP STATUS TO 'CLOSED' ############
                 if res3.link['status']['335'][curr_t*3600] == 1: 
-                    res_groundTruth.link['status']['335'][curr_t*3600] = 0
-                    #res3.link['status']['335'][curr_t*3600] = 0
+                    res_groundTruth.link['status']['335'][curr_t*3600] = LinkStatus.Closed
+                    #res_groundTruth.link['status']['60'][curr_t*3600] = LinkStatus.Closed
+                    
+                    if 'close pipe 335' not in wn2._controls:
+                        pipe = wn2.get_link('335')        
+                        act = wntr.network.controls.ControlAction(pipe, 'status', 
+                                                                    wntr.network.LinkStatus.Closed)
+                        cond = wntr.network.controls.SimTimeCondition(wn2, '>', '00:00:00')
+                        ctrl = wntr.network.controls.Control(cond, act, priority=ControlPriority.very_high)
+                        wn2.add_control('close pipe ' + '335', ctrl)
+                    if 'close pipe 60' not in wn2._controls:
+                        pipe = wn2.get_link('60')        
+                        act = wntr.network.controls.ControlAction(pipe, 'status', 
+                                                                    wntr.network.LinkStatus.Closed)
+                        cond = wntr.network.controls.SimTimeCondition(wn2, '>', '00:00:00')
+                        ctrl = wntr.network.controls.Control(cond, act, priority=ControlPriority.very_high)
+                        wn2.add_control('close pipe ' + '60', ctrl)
+               #res3.link['status']['335'][curr_t*3600] = 0
                 ####################################################################################    
             if c2.write_multiple_registers(0x0061,[int(pv*1e3)]): #overwrite t1 head with incorrect head which would read as safe
                 res3.node["pressure"].loc[(20+i+1)*3600,'1'] = pv #conditionally set backend values
@@ -185,6 +206,14 @@ for i in range(28):
                     ctl_store["control 15"] = wn2.get_control("control 15")
                     wn2._cps_reg["PLC2"].disable_control("control 15")
                     print("Control 15 deleted.")
+                    if 'deactivate pump 335' not in wn2._controls:
+                        pump = wn2.get_link('335')   
+                        tank = wn2.get_node('1')     
+                        act = wntr.network.controls.ControlAction(pump, 'status', 
+                                                                    wntr.network.LinkStatus.Closed)
+                        cond = wntr.network.controls.ValueCondition(tank, 'level', '>', '0.21208')
+                        ctrl = wntr.network.controls.Control(cond, act, priority=ControlPriority.very_high)
+                        wn2.add_control('deactivate pump 335', ctrl)
                 # removed control: "IF TANK 1 LEVEL BELOW 5.21208 THEN PUMP 335 STATUS IS OPEN PRIORITY 3"
                 if wn2._controls.get("control 17") != None:
                     ctl_store["control 17"] = wn2.get_control("control 17")
@@ -209,6 +238,7 @@ for i in range(28):
     wn2.set_initial_conditions(res_groundTruth, ts=3600)
     wn2.options.time.pattern_start = wn2.options.time.pattern_start + (1 * 3600)
     if(flag):
+        wn2._link_reg['335'].initial_status = LinkStatus.Closed
         if wn2._controls.get("control 15") != None:
             ctl_store["control 15"] = wn2.get_control("control 15")
             wn2._cps_reg["PLC2"].disable_control("control 15")

@@ -8,7 +8,7 @@ import enum
 import numpy as np
 import logging
 import six
-from .elements import LinkStatus
+from wntr.network.elements import LinkStatus
 import abc
 from wntr.utils.ordered_set import OrderedSet
 from collections import OrderedDict

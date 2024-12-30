@@ -11,7 +11,7 @@ import numpy as np
 import wntr
 
 # Create a water network model 
-inp_file = 'networks/Net3.inp'
+inp_file = 'examples/networks/Net3.inp'
 wn = wntr.network.WaterNetworkModel(inp_file)
 
 # Adjust simulation options for criticality analyses

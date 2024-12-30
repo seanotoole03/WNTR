@@ -14,6 +14,11 @@ from pyModbusTCP.server import ModbusServer, DataHandler
 from pyModbusTCP.constants import EXP_ILLEGAL_FUNCTION
 from pyModbusTCP.client import ModbusClient
 
+import pycomm3
+import serial
+
+import os
+#print(os.environ.get('VIRTUAL_ENV'))
 # Create a water network model
 inp_file = '../networks/Net3.inp'
 wn = wntr.network.WaterNetworkModel(inp_file)

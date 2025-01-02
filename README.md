@@ -1,7 +1,9 @@
 <h1>
 <img src="https://raw.githubusercontent.com/usepa/wntr/main/documentation/_static/logo.jpg" width="375">
 </h1><br>
-
+[![build](https://github.com/seanotoole03/WNTR/actions/workflows/build_tests.yml/badge.svg)](https://github.com/seanotoole03/WNTR/actions/workflows/build_tests.yml)
+[![Coverage Status](https://coveralls.io/repos/github/seanotoole03/WNTR/badge.svg?branch=main)](https://coveralls.io/github/seanotoole03/WNTR?branch=main)
+[![docs](https://github.com/seanotoole03/WNTR/actions/workflows/build_deploy_pages.yml/badge.svg)](https://github.com/seanotoole03/WNTR/actions/workflows/build_deploy_pages.yml)
 
 WNTR+CPS Fork Information
 --------------
@@ -10,7 +12,6 @@ between Boise State University and Sandia National Labs focusing on representati
 Cyber-physical Systems (CPS) within water distribution networks. The capabilities introduced by the components
 introduced in this module may not have full test coverage, but the developer will attempt to address any bugs or 
 errors as they are reported, and add corresponding tests as necessary.
-
 
 Core WNTR Information
 --------------
@@ -35,10 +36,10 @@ This software package includes additional capabilities to those listed above:
 * Estimate CPS network resilience using spectral gap and connectivity
 * Assign network controls and modify or delete controls through CPS node functions
 * Automatically generate CPS networks based on hydraulic network models
+* 2025 v1 WNTRGoop release adds initial demonstration of use of WNTR+CPS and python-based MODBUS, EIP, Serial traffic generation modules in replicating/paralleling the 2024 Ukraine FrostyGoop attacks
 
 Installation
 --------------
-
 
 The latest release of WNTR+CPS can only be installed manually from this codebase, and requires running in a virtual environment to overwrite core WNTR library functions it has modified.
 

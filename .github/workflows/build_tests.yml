@@ -62,8 +62,7 @@ jobs:
     - name: Install wntr
       run: |
         python -m pip install --upgrade pip
-        pip install wheel "numpy>=1.2.1,<2.0" scipy networkx pandas matplotlib setuptools
-        pip install -r requirements.txt
+        pip install wheel "numpy>=1.2.1,<2.0" scipy networkx pandas matplotlib setuptools pyModbusTCP pycomm3 pyserial awlsim
         pip install --no-index --pre --find-links=. wntr
     - name: Usage of wntr
       run: |

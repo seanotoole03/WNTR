@@ -1,6 +1,7 @@
 <h1>
 <img src="https://raw.githubusercontent.com/usepa/wntr/main/documentation/_static/logo.jpg" width="375">
 </h1><br>
+
 [![build](https://github.com/seanotoole03/WNTR/actions/workflows/build_tests.yml/badge.svg)](https://github.com/seanotoole03/WNTR/actions/workflows/build_tests.yml)
 [![Coverage Status](https://coveralls.io/repos/github/seanotoole03/WNTR/badge.svg?branch=main)](https://coveralls.io/github/seanotoole03/WNTR?branch=main)
 [![docs](https://github.com/seanotoole03/WNTR/actions/workflows/build_deploy_pages.yml/badge.svg)](https://github.com/seanotoole03/WNTR/actions/workflows/build_deploy_pages.yml)

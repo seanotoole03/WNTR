@@ -89,7 +89,9 @@ class TestCPSLayer(unittest.TestCase):
 
     def test_CPS_layer_simple(self):
         # generate a simple cps_layer
-        cps_layer = autogenerate_full_cps_layer(self.wn, placement_type='simple', timed_control_assignments='local', edge_types='MODBUS', n=2, verbose=1)
+        self.wn._cps_reg.__clear__(self.wn)
+        self.wn._cps_edges.__clear__(self.wn)
+        cps_layer = wntr.network.layer.autogenerate_full_cps_layer(self.wn, placement_type='simple', timed_control_assignments='local', edge_types='MODBUS', n=2, verbose=1)
 
         expected = pd.read_csv(
             join(test_datadir, "net6_autogen_simple_local_MODBUS_2.csv"), index_col=0, dtype="object"
@@ -98,8 +100,10 @@ class TestCPSLayer(unittest.TestCase):
         assert_frame_equal(cps_layer, expected)
 
     def test_CPS_layer_complex(self):
-
-        cps_layer = autogenerate_full_cps_layer(self.wn, placement_type='complex', timed_control_assignments='local', edge_types='MODBUS', n=2, verbose=1)
+        
+        self.wn._cps_reg.__clear__(self.wn)
+        self.wn._cps_edges.__clear__(self.wn)
+        cps_layer = wntr.network.layer.autogenerate_full_cps_layer(self.wn, placement_type='complex', timed_control_assignments='local', edge_types='MODBUS', n=2, verbose=1)
 
         expected = pd.read_csv(
             join(test_datadir, "net6_autogen_complex_local_MODBUS_2.csv"), index_col=0, dtype="object"

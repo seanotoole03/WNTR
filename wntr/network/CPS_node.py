@@ -1036,7 +1036,20 @@ class CPSNodeRegistry(Registry):
 
     def _finalize_(self, model):
         super()._finalize_(model)
-
+    
+    def __clear__(self, model):
+        super(CPSNodeRegistry, self).__init__(model)
+        self._listSCADA = OrderedSet()
+        self._listPLC = OrderedSet()
+        self._listRTU = OrderedSet()
+        self._wn = model
+        
+        # initialize ip list and variables
+        self._ip = '127.0.0.1' # defacto set registry as a sort of 'DHCP server' or 'start point' for the model?
+        self._ip_list = OrderedSet()
+        self._ip_list.add(self._ip)
+        self._ip_count = int(self._ip.split('.')[3]) # should grab '1', allowing for iteration for basic "DHCP" assignment
+        
     def __setitem__(self, key, value):
         if not isinstance(key, six.string_types):
             raise ValueError("Registry keys must be strings")
@@ -1315,6 +1328,13 @@ class CPSEdgeRegistry(Registry):
     def _finalize_(self, model):
         super()._finalize_(model)
 
+    def __clear__(self, model):
+        super(CPSEdgeRegistry, self).__init__(model)
+        self._listMODBUS = OrderedSet()
+        self._listEIP = OrderedSet()
+        self._listSER = OrderedSet()
+        self._wn = model
+        
     def __setitem__(self, key, value):
         if not isinstance(key, six.string_types):
             raise ValueError("Registry keys must be strings")

@@ -15,11 +15,12 @@ inp_file = '../networks/Net6.inp'
 wn_control = wntr.network.WaterNetworkModel(inp_file)
 wn_event = wntr.network.WaterNetworkModel(inp_file)
 # Generate a CPS layer     
-autogenerate_full_cps_layer(wn_event, placement_type='complex', timed_control_assignments='local', edge_types='MODBUS', n=2, verbose=1)
+cps_layer = autogenerate_full_cps_layer(wn_event, placement_type='complex', timed_control_assignments='local', edge_types='MODBUS', n=2, verbose=1)
 # Test the CPS layer's connectivity
 cpsG = wn_event.cps_to_graph()
-print(wntr.metrics.topographic.algebraic_connectivity(cpsG))
-print(wntr.metrics.topographic.spectral_gap(cpsG))
+#cps_layer.to_csv('../../wntr/tests/networks_for_testing/net6_autogen_complex_local_MODBUS_2.csv', index=True)
+#print(wntr.metrics.topographic.algebraic_connectivity(cpsG))
+#print(wntr.metrics.topographic.spectral_gap(cpsG))
 # Modify Controls
 wn_event._cps_reg["SCADA-HMI"].change_control(" IF TANK TANK-3343 LEVEL BELOW 8.65632 THEN PUMP PUMP-3863 STATUS IS OPEN PRIORITY 3", "control 70", "LINK PUMP-3863 OPEN IF Node TANK-3343 BELOW 9.65632 PRIORITY 6", "control 69")
 #wn_event._cps_reg["SCADA-HMI"].change_control("IF SYSTEM TIME IS 98:00:00 THEN PUMP 10 STATUS IS OPEN PRIORITY 3","control 9", "Link 10 OPEN AT TIME 97", "control 9")

@@ -4,6 +4,18 @@ from os.path import abspath, dirname, join
 import pandas as pd
 import wntr
 from pandas.testing import assert_frame_equal
+from wntr.network.controls import Control, Rule
+from wntr.network.CPS_node import SCADA, PLC, RTU, MODBUS, EIP, SER, CPSNodeRegistry, CPSEdgeRegistry
+from wntr.network.layer import autogenerate_full_cps_layer
+import argparse
+from pyModbusTCP.server import ModbusServer, DataHandler
+from pyModbusTCP.constants import EXP_ILLEGAL_FUNCTION
+from pyModbusTCP.client import ModbusClient
+
+import random as rand
+
+import pycomm3
+import serial
 
 testdir = dirname(abspath(str(__file__)))
 test_datadir = join(testdir, "networks_for_testing")
@@ -62,6 +74,38 @@ class TestValveLayer(unittest.TestCase):
 
             self.assertEqual(valves.shape[0], expected_n_valves[N])
             assert_frame_equal(valves, expected_valves, check_index_type=False)
+
+
+class TestCPSLayer(unittest.TestCase):
+    @classmethod
+    def setUpClass(self):
+
+        inp_file = join(ex_datadir, "Net6.inp")
+        self.wn = wntr.network.WaterNetworkModel(inp_file)
+        
+    @classmethod
+    def tearDownClass(self):
+        pass
+
+    def test_CPS_layer_simple(self):
+        # generate a simple cps_layer
+        cps_layer = autogenerate_full_cps_layer(self.wn, placement_type='simple', timed_control_assignments='local', edge_types='MODBUS', n=2, verbose=1)
+
+        expected = pd.read_csv(
+            join(test_datadir, "net6_autogen_simple_local_MODBUS_2.csv"), index_col=0, dtype="object"
+        )
+
+        assert_frame_equal(cps_layer, expected)
+
+    def test_CPS_layer_complex(self):
+
+        cps_layer = autogenerate_full_cps_layer(self.wn, placement_type='complex', timed_control_assignments='local', edge_types='MODBUS', n=2, verbose=1)
+
+        expected = pd.read_csv(
+            join(test_datadir, "net6_autogen_complex_local_MODBUS_2.csv"), index_col=0, dtype="object"
+        )
+
+        assert_frame_equal(cps_layer, expected)
 
 
 if __name__ == "__main__":

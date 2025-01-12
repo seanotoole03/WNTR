@@ -862,8 +862,8 @@ class MODBUS(CPS_Edge):
         parser.add_argument('-H', '--host', type=str, default='localhost', help='Host (default: localhost)')
         parser.add_argument('-p', '--port', type=int, default=502, help='TCP port (default: 502)')
         print(sys.argv)
-        args = parser.parse_known_args()
-        
+        args, unknown = parser.parse_known_args()
+        print(unknown)
         self._connection_limit = 255 #limits of modbus device count communication
         self._server = ModbusServer(host=self._start_node_ip, port=502, no_block=True) #server/start on junction/CPS_node endpoint, default param port 502
         self._server.start()
